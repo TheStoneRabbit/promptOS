@@ -238,9 +238,9 @@ def print_help():
 def get_input(session) -> str:
     if PROMPT_TOOLKIT:
         style = Style.from_dict({"prompt": "bold ansigreen"})
-        return session.prompt(HTML("<prompt>promptOS</prompt><ansiwhite>❯</ansiwhite> "), style=style).strip()
+        return session.prompt(HTML("<prompt>promptOS</prompt><ansiwhite>></ansiwhite> "), style=style).strip()
     else:
-        return input("\001\033[1;32m\002promptOS❯\001\033[0m\002 ").strip()
+        return input("\001\033[1;32m\002promptOS>\001\033[0m\002 ").strip()
 
 
 def render_response(text: str, provider_name: str):
