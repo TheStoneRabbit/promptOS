@@ -35,9 +35,17 @@ figlet
 python
 python-pip
 python-requests
+python-rich
+python-prompt_toolkit
 
 # Build tools (needed for pip installs)
 base-devel
+
+# Installer
+arch-install-scripts
+parted
+dosfstools
+e2fsprogs
 
 # archiso internals (required for live environment)
 archiso

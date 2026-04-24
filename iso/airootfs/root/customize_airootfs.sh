@@ -20,6 +20,7 @@ Type=simple
 User=root
 Environment=OLLAMA_MODELS=/var/lib/ollama/models
 Environment=OLLAMA_HOST=127.0.0.1:11434
+Environment=OLLAMA_LOAD_TIMEOUT=10m
 ExecStart=/usr/local/bin/ollama serve
 Restart=on-failure
 RestartSec=3
@@ -33,7 +34,7 @@ OLLAMA_HOME=/var/lib/ollama
 OLLAMA_MODELS=$OLLAMA_HOME/models
 mkdir -p "$OLLAMA_MODELS"
 
-echo "[promptOS] Pulling base model (llama3.2:1b)..."
+echo "[promptOS] Pulling base model (dolphin3:8b)..."
 # Start the daemon temporarily, pull the model, then stop it
 OLLAMA_MODELS=$OLLAMA_MODELS OLLAMA_HOST=127.0.0.1:11434 ollama serve &
 OLLAMA_PID=$!
@@ -46,13 +47,17 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-OLLAMA_MODELS=$OLLAMA_MODELS ollama pull llama3.2:1b
+OLLAMA_MODELS=$OLLAMA_MODELS ollama pull dolphin3:8b
 
 # Stop daemon cleanly
 kill "$OLLAMA_PID" 2>/dev/null || true
 wait "$OLLAMA_PID" 2>/dev/null || true
 
-echo "[promptOS] Ollama installed with model llama3.2:1b"
+echo "[promptOS] Ollama installed with model dolphin3:8b"
+
+# ── Pre-compile Python bytecode for faster startup ────────────────────────────
+echo "[promptOS] Pre-compiling Python bytecode..."
+python -m compileall -q /usr/local/lib/promptos/ 2>/dev/null || true
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 echo "[promptOS] Airootfs customization complete."

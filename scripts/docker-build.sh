@@ -11,6 +11,10 @@ echo "[promptOS] Output:  $OUTPUT_DIR"
 
 mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 
+# Sync package databases from the pinned archive snapshot
+echo "[promptOS] Syncing package databases..."
+pacman -Sy --noconfirm --disable-sandbox
+
 # Copy cached Ollama models into airootfs before build (populated by customize_airootfs.sh on first run)
 if [ -d "/var/lib/ollama/models" ] && [ "$(ls -A /var/lib/ollama/models 2>/dev/null)" ]; then
     echo "[promptOS] Using cached Ollama models from volume..."

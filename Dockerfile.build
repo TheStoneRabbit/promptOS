@@ -3,6 +3,12 @@
 
 FROM --platform=linux/amd64 archlinux:latest
 
+# Pin to a specific Arch Linux Archive snapshot for reproducible builds.
+# The archive always has consistent DB + packages (no mirror sync races).
+# Update the date below to pick up newer packages.
+ARG ARCH_SNAPSHOT=2026/04/10
+RUN echo "Server = https://archive.archlinux.org/repos/${ARCH_SNAPSHOT}/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
+
 # Update and install archiso
 # --disable-sandbox is required when running pacman inside Docker on macOS
 # (seccomp syscall restrictions block pacman's sandbox user switching)

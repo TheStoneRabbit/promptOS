@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""
+promptos-install — installer for promptOS.
+Partitions the selected disk, installs Arch + promptOS, sets up bootloader.
+Run from the live environment: type 'install promptOS' at the promptOS> prompt,
+or run directly: promptos-install
+"""
+
+import os
+import sys
+import subprocess
+import json
+import shutil
+import time
+
+sys.path.insert(0, "/usr/local/lib/promptos")
+
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.prompt import Prompt, Confirm
+    from rich import box
+    console = Console()
+    RICH = True
+except ImportError:
+    RICH = False
+    console = None
+
+MOUNTPOINT = "/mnt"
+
+
+def print_step(title: str, body: str = ""):
+    if RICH:
+        console.print(Panel(body, title=f"[bold cyan]{title}[/bold cyan]", border_style="cyan", box=box.ROUNDED))
+    else:
+        print(f"\n=== {title} ===")
+        if body:
+            print(body)
+
+
+def ask(prompt: str, default: str = "") -> str:
+    if RICH:
+        return Prompt.ask(f"[bold green]{prompt}[/bold green]", default=default)
+    return input(f"{prompt} [{default}]: ").strip() or default
+
+
+def confirm(prompt: str, default: bool = True) -> bool:
+    if RICH:
+        return Confirm.ask(f"[bold yellow]{prompt}[/bold yellow]", default=default)
+    ans = input(f"{prompt} [{'Y/n' if default else 'y/N'}]: ").strip().lower()
+    if not ans:
+        return default
+    return ans in ("y", "yes")
+
+
+def run(cmd: str, check: bool = True) -> int:
+    if RICH:
+        console.print(f"[dim]$ {cmd}[/dim]")
+    else:
+        print(f"$ {cmd}")
+    result = subprocess.run(cmd, shell=True)
+    if check and result.returncode != 0:
+        if RICH:
+            console.print(f"[red]Command failed (exit {result.returncode})[/red]")
+        else:
+            print(f"Error: command failed (exit {result.returncode})")
+        raise SystemExit(1)
+    return result.returncode
+
+
+def get_disks() -> list[dict]:
+    try:
+        out = subprocess.check_output(
+            ["lsblk", "-J", "-o", "NAME,SIZE,TYPE,MODEL,MOUNTPOINT"],
+            text=True
+        )
+        data = json.loads(out)
+        disks = []
+        for dev in data.get("blockdevices", []):
+            if dev.get("type") == "disk":
+                disks.append({
+                    "name": f"/dev/{dev['name']}",
+                    "size": dev.get("size", "?"),
+                    "model": dev.get("model", "Unknown"),
+                })
+        return disks
+    except Exception:
+        return []
+
+
+def part_names(disk: str) -> tuple[str, str]:
+    """Return (efi_partition, root_partition) names for a given disk."""
+    if disk.startswith("/dev/nvme") or disk.startswith("/dev/mmcblk"):
+        return f"{disk}p1", f"{disk}p2"
+    return f"{disk}1", f"{disk}2"
+
+
+def partition_disk(disk: str):
+    """Wipe and partition: 512MiB EFI + rest as root."""
+    run(f"parted -s {disk} mklabel gpt")
+    run(f"parted -s {disk} mkpart ESP fat32 1MiB 513MiB")
+    run(f"parted -s {disk} set 1 esp on")
+    run(f"parted -s {disk} mkpart primary ext4 513MiB 100%")
+    # Let kernel re-read partition table
+    subprocess.run(f"partprobe {disk}", shell=True)
+    time.sleep(1)
+
+
+def format_partitions(disk: str) -> tuple[str, str]:
+    """Format partitions and return (efi, root)."""
+    efi, root = part_names(disk)
+    run(f"mkfs.fat -F32 -n EFI {efi}")
+    run(f"mkfs.ext4 -F -L promptOS {root}")
+    return efi, root
+
+
+def mount_partitions(efi: str, root: str):
+    run(f"mount {root} {MOUNTPOINT}")
+    run(f"mkdir -p {MOUNTPOINT}/boot")
+    run(f"mount {efi} {MOUNTPOINT}/boot")
+
+
+def install_base(packages: list[str]):
+    pkg_str = " ".join(packages)
+    run(f"pacstrap -K {MOUNTPOINT} {pkg_str}")
+    # Replace archive/pinned mirrorlist with live mirrors on the installed system
+    live_mirrors = (
+        "Server = https://mirrors.kernel.org/archlinux/$repo/os/$arch\n"
+        "Server = https://mirror.rackspace.com/archlinux/$repo/os/$arch\n"
+        "Server = https://mirrors.mit.edu/archlinux/$repo/os/$arch\n"
+        "Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch\n"
+    )
+    os.makedirs(f"{MOUNTPOINT}/etc/pacman.d", exist_ok=True)
+    with open(f"{MOUNTPOINT}/etc/pacman.d/mirrorlist", "w") as f:
+        f.write(live_mirrors)
+
+
+def setup_system(hostname: str, timezone: str, locale: str):
+    # fstab
+    run(f"genfstab -U {MOUNTPOINT} >> {MOUNTPOINT}/etc/fstab")
+
+    # Timezone
+    run(f"arch-chroot {MOUNTPOINT} ln -sf /usr/share/zoneinfo/{timezone} /etc/localtime")
+    run(f"arch-chroot {MOUNTPOINT} hwclock --systohc", check=False)
+
+    # Locale
+    locale_gen = f"{MOUNTPOINT}/etc/locale.gen"
+    with open(locale_gen, "a") as f:
+        f.write(f"{locale} UTF-8\n")
+    run(f"arch-chroot {MOUNTPOINT} locale-gen")
+    with open(f"{MOUNTPOINT}/etc/locale.conf", "w") as f:
+        f.write(f"LANG={locale}\n")
+
+    # Hostname
+    with open(f"{MOUNTPOINT}/etc/hostname", "w") as f:
+        f.write(f"{hostname}\n")
+
+    # Hosts
+    with open(f"{MOUNTPOINT}/etc/hosts", "w") as f:
+        f.write(f"127.0.0.1  localhost\n::1        localhost\n127.0.1.1  {hostname}\n")
+
+    # Enable services
+    run(f"arch-chroot {MOUNTPOINT} systemctl enable NetworkManager sshd", check=False)
+
+
+def install_bootloader():
+    run(f"arch-chroot {MOUNTPOINT} bootctl install")
+
+    # loader.conf
+    with open(f"{MOUNTPOINT}/boot/loader/loader.conf", "w") as f:
+        f.write("default promptos.conf\ntimeout 3\nconsole-mode max\neditor no\n")
+
+    # Get root partition UUID
+    root_part = subprocess.check_output(
+        f"findmnt -no UUID {MOUNTPOINT}",
+        shell=True, text=True
+    ).strip()
+
+    with open(f"{MOUNTPOINT}/boot/loader/entries/promptos.conf", "w") as f:
+        f.write(
+            "title   promptOS\n"
+            "linux   /vmlinuz-linux\n"
+            "initrd  /initramfs-linux.img\n"
+            f"options root=UUID={root_part} rw quiet\n"
+        )
+
+
+def install_promptos():
+    """Copy promptOS files into the installed system."""
+    copies = [
+        ("/usr/local/bin/promptsh",       f"{MOUNTPOINT}/usr/local/bin/promptsh"),
+        ("/usr/local/bin/promptos-keys",  f"{MOUNTPOINT}/usr/local/bin/promptos-keys"),
+        ("/usr/local/bin/promptos-install", f"{MOUNTPOINT}/usr/local/bin/promptos-install"),
+        ("/usr/local/lib/promptos",        f"{MOUNTPOINT}/usr/local/lib/promptos"),
+        ("/etc/promptos",                  f"{MOUNTPOINT}/etc/promptos"),
+    ]
+    for src, dst in copies:
+        if os.path.exists(src):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            run(f"cp -a {src} {dst}", check=False)
+
+    # Make scripts executable
+    for script in ["promptsh", "promptos-keys", "promptos-install"]:
+        path = f"{MOUNTPOINT}/usr/local/bin/{script}"
+        if os.path.exists(path):
+            os.chmod(path, 0o755)
+
+    # Set promptsh as root's login shell
+    run(f"arch-chroot {MOUNTPOINT} chsh -s /usr/local/bin/promptsh root", check=False)
+
+    # Copy Ollama binary and models
+    if os.path.exists("/usr/local/bin/ollama"):
+        run(f"cp /usr/local/bin/ollama {MOUNTPOINT}/usr/local/bin/ollama", check=False)
+        os.chmod(f"{MOUNTPOINT}/usr/local/bin/ollama", 0o755)
+
+    if os.path.exists("/var/lib/ollama"):
+        run(f"mkdir -p {MOUNTPOINT}/var/lib/ollama")
+        run(f"cp -a /var/lib/ollama/models {MOUNTPOINT}/var/lib/ollama/", check=False)
+
+    # Copy systemd service files
+    for svc in ["ollama.service", "ollama-warmup.service"]:
+        src = f"/etc/systemd/system/{svc}"
+        if os.path.exists(src):
+            run(f"cp {src} {MOUNTPOINT}/etc/systemd/system/{svc}", check=False)
+
+    # Enable ollama services
+    run(f"arch-chroot {MOUNTPOINT} systemctl enable ollama ollama-warmup", check=False)
+
+    # Copy warmup script
+    if os.path.exists("/usr/local/bin/promptos-warmup"):
+        run(f"cp /usr/local/bin/promptos-warmup {MOUNTPOINT}/usr/local/bin/promptos-warmup", check=False)
+        os.chmod(f"{MOUNTPOINT}/usr/local/bin/promptos-warmup", 0o755)
+
+
+def main():
+    if os.geteuid() != 0:
+        print("promptos-install must be run as root.")
+        sys.exit(1)
+
+    # ── Welcome ───────────────────────────────────────────────────────────────
+    print_step(
+        "Welcome to promptOS Installer",
+        "This will install promptOS to your disk.\n"
+        "Disk will be partitioned automatically:\n"
+        "  • 512 MiB EFI boot partition\n"
+        "  • Remaining space → root (/)\n\n"
+        "[bold red]WARNING: The selected disk will be completely erased.[/bold red]"
+    )
+
+    if not confirm("Ready to begin?", default=True):
+        print("Installation cancelled.")
+        sys.exit(0)
+
+    # ── Disk selection ────────────────────────────────────────────────────────
+    print_step("Select Installation Disk")
+    disks = get_disks()
+
+    if not disks:
+        if RICH:
+            console.print("[red]No disks found. Make sure you're booted from the live ISO.[/red]")
+        sys.exit(1)
+
+    if RICH:
+        for i, d in enumerate(disks):
+            console.print(f"  [bold]{i+1}[/bold]. {d['name']:12} {d['size']:8} {d['model']}")
+    else:
+        for i, d in enumerate(disks):
+            print(f"  {i+1}. {d['name']:12} {d['size']:8} {d['model']}")
+
+    while True:
+        choice = ask("Disk number", "1")
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(disks):
+                target_disk = disks[idx]["name"]
+                break
+        except ValueError:
+            pass
+        print("Invalid choice, try again.")
+
+    if RICH:
+        console.print(f"\n[bold yellow]Target: {target_disk}[/bold yellow]")
+    if not confirm(f"ALL DATA on {target_disk} will be erased. Continue?", default=False):
+        print("Installation cancelled.")
+        sys.exit(0)
+
+    # ── Config ────────────────────────────────────────────────────────────────
+    print_step("System Configuration")
+    hostname = ask("Hostname", "promptos")
+    timezone = ask("Timezone (e.g. America/New_York)", "UTC")
+    locale   = ask("Locale", "en_US.UTF-8")
+
+    # ── Install ───────────────────────────────────────────────────────────────
+    print_step(
+        "Installing",
+        f"Installing promptOS to {target_disk}. This will take several minutes."
+    )
+
+    print_step("Partitioning Disk")
+    partition_disk(target_disk)
+    efi, root = format_partitions(target_disk)
+
+    print_step("Mounting Partitions")
+    mount_partitions(efi, root)
+
+    print_step("Installing Base System")
+    install_base([
+        "base", "linux", "linux-firmware", "mkinitcpio",
+        "networkmanager", "openssh",
+        "python", "python-pip", "python-rich", "python-prompt_toolkit",
+        "vim", "curl", "wget", "git", "htop", "figlet",
+        "efibootmgr",
+    ])
+
+    print_step("Configuring System")
+    setup_system(hostname, timezone, locale)
+
+    print_step("Installing Bootloader")
+    install_bootloader()
+
+    print_step("Installing promptOS")
+    install_promptos()
+
+    # ── Done ──────────────────────────────────────────────────────────────────
+    print_step(
+        "Installation Complete!",
+        f"promptOS has been installed to {target_disk}.\n\n"
+        "Remove the USB drive and reboot."
+    )
+
+    if confirm("Reboot now?", default=True):
+        run("reboot")
+
+
+if __name__ == "__main__":
+    main()

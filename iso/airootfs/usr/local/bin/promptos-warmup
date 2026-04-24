@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# promptos-warmup — pre-loads the Ollama model into RAM at boot
+# Runs as a systemd service before the user logs in.
+
+MODEL="${PROMPTOS_OLLAMA_MODEL:-dolphin3:8b}"
+BASE_URL="${PROMPTOS_OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
+
+echo "[promptOS] Waiting for Ollama to be ready..."
+for i in $(seq 1 30); do
+    curl -sf "${BASE_URL}/api/tags" > /dev/null && break
+    sleep 2
+done
+
+echo "[promptOS] Pre-loading model ${MODEL} into RAM..."
+# Retry loop — Ollama may return 500 while the runner is still starting
+for attempt in $(seq 1 5); do
+    HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+        --max-time 300 \
+        -H 'Content-Type: application/json' \
+        -d '{"model":"'"${MODEL}"'","prompt":"hi","stream":false}' \
+        "${BASE_URL}/api/generate")
+    if [ "$HTTP" = "200" ]; then
+        echo "[promptOS] Model loaded and ready."
+        exit 0
+    fi
+    echo "[promptOS] Warmup attempt ${attempt} got HTTP ${HTTP}, retrying in 10s..."
+    sleep 10
+done
+echo "[promptOS] Warmup could not pre-load model (will load on first use)."
