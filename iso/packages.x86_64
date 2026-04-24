@@ -1,0 +1,44 @@
+# Base system
+base
+linux
+linux-firmware
+mkinitcpio
+systemd
+systemd-sysvcompat
+
+# Boot
+grub
+efibootmgr
+syslinux
+
+# Network
+networkmanager
+openssh
+iw
+wireless-regdb
+dialog
+wpa_supplicant
+
+# Essential tools
+bash
+vim
+nano
+git
+curl
+wget
+htop
+man-db
+man-pages
+figlet
+
+# Python (AI glue layer)
+python
+python-pip
+python-requests
+
+# Build tools (needed for pip installs)
+base-devel
+
+# archiso internals (required for live environment)
+archiso
+mkinitcpio-archiso

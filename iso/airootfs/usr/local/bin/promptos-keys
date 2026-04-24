@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""
+promptos-keys — manage API keys for promptOS providers.
+Keys are stored in /etc/promptos/keys (root-only, mode 600).
+
+Usage:
+  promptos-keys set claude <key>
+  promptos-keys set openai <key>
+  promptos-keys show
+  promptos-keys clear claude
+"""
+
+import os
+import sys
+import stat
+
+KEYS_FILE = "/etc/promptos/keys"
+PROVIDER_MAP = {
+    "claude": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+
+
+def load_keys() -> dict[str, str]:
+    keys = {}
+    if not os.path.exists(KEYS_FILE):
+        return keys
+    with open(KEYS_FILE) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                keys[k.strip()] = v.strip()
+    return keys
+
+
+def save_keys(keys: dict[str, str]):
+    os.makedirs(os.path.dirname(KEYS_FILE), exist_ok=True)
+    with open(KEYS_FILE, "w") as f:
+        f.write("# promptOS API keys — do not share this file\n")
+        for k, v in keys.items():
+            f.write(f"{k}={v}\n")
+    os.chmod(KEYS_FILE, stat.S_IRUSR | stat.S_IWUSR)  # 600
+
+
+def cmd_set(provider: str, key: str):
+    env_var = PROVIDER_MAP.get(provider)
+    if not env_var:
+        print(f"Unknown provider '{provider}'. Choose from: {list(PROVIDER_MAP)}")
+        sys.exit(1)
+    keys = load_keys()
+    keys[env_var] = key
+    save_keys(keys)
+    print(f"[ok] {provider} key saved to {KEYS_FILE}")
+
+
+def cmd_show():
+    keys = load_keys()
+    if not keys:
+        print("No keys stored.")
+        return
+    for provider, env_var in PROVIDER_MAP.items():
+        val = keys.get(env_var, "")
+        masked = (val[:6] + "..." + val[-4:]) if len(val) > 12 else ("(set)" if val else "(not set)")
+        print(f"  {provider:10} {env_var:25} {masked}")
+
+
+def cmd_clear(provider: str):
+    env_var = PROVIDER_MAP.get(provider)
+    if not env_var:
+        print(f"Unknown provider '{provider}'.")
+        sys.exit(1)
+    keys = load_keys()
+    if env_var in keys:
+        del keys[env_var]
+        save_keys(keys)
+        print(f"[ok] {provider} key removed.")
+    else:
+        print(f"{provider} key was not set.")
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        print(__doc__)
+        sys.exit(0)
+
+    cmd = args[0]
+    if cmd == "set" and len(args) == 3:
+        cmd_set(args[1], args[2])
+    elif cmd == "show":
+        cmd_show()
+    elif cmd == "clear" and len(args) == 2:
+        cmd_clear(args[1])
+    else:
+        print(__doc__)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

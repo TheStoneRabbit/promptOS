@@ -1,0 +1,23 @@
+# promptOS ISO builder
+# Runs archiso inside an Arch Linux container to produce a bootable ISO
+
+FROM --platform=linux/amd64 archlinux:latest
+
+# Update and install archiso
+# --disable-sandbox is required when running pacman inside Docker on macOS
+# (seccomp syscall restrictions block pacman's sandbox user switching)
+RUN pacman -Syu --noconfirm --disable-sandbox && \
+    pacman -S --noconfirm --disable-sandbox archiso git python && \
+    pacman -Scc --noconfirm
+
+# Working directory inside the container
+WORKDIR /build
+
+# Copy our ISO profile into the container
+COPY iso/ /build/profile/
+
+# Build script entrypoint
+COPY scripts/docker-build.sh /build/docker-build.sh
+RUN chmod +x /build/docker-build.sh
+
+ENTRYPOINT ["/build/docker-build.sh"]

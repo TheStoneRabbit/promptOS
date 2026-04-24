@@ -1,0 +1,23 @@
+# ISO build output
+dist/
+iso/work/
+*.iso
+*.img
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
