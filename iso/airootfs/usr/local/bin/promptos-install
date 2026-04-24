@@ -208,6 +208,17 @@ def install_promptos():
     # Set promptsh as root's login shell
     run(f"arch-chroot {MOUNTPOINT} chsh -s /usr/local/bin/promptsh root", check=False)
 
+    # Also launch promptsh from bash for any interactive session
+    bashrc = (
+        "# promptOS — launch promptsh for any interactive shell session\n"
+        "if [[ $- == *i* ]] && [[ -z \"$PROMPTSH_ACTIVE\" ]] && [[ -x /usr/local/bin/promptsh ]]; then\n"
+        "    export PROMPTSH_ACTIVE=1\n"
+        "    exec /usr/local/bin/promptsh\n"
+        "fi\n"
+    )
+    with open(f"{MOUNTPOINT}/etc/bash.bashrc", "w") as f:
+        f.write(bashrc)
+
     # Copy Ollama binary and models
     if os.path.exists("/usr/local/bin/ollama"):
         run(f"cp /usr/local/bin/ollama {MOUNTPOINT}/usr/local/bin/ollama", check=False)
