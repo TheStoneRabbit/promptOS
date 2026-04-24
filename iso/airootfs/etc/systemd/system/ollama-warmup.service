@@ -1,0 +1,17 @@
+[Unit]
+Description=Ollama model warm-up (pre-load llama3.2:1b into RAM)
+After=ollama.service
+Requires=ollama.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Wait for Ollama HTTP server to be ready
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/tags && break; sleep 2; done'
+# Send a minimal request to load model weights into RAM (may take 60s+)
+ExecStart=/bin/bash -c 'curl -sf http://127.0.0.1:11434/api/chat \
+  -d "{\"model\":\"llama3.2:1b\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":false}" \
+  --max-time 300 > /dev/null'
+
+[Install]
+WantedBy=multi-user.target
