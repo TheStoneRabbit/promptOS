@@ -141,7 +141,9 @@ def extract_commands(response: str) -> list[str]:
     return cmds
 
 
-def run_commands(cmds: list[str], autorun: bool = False):
+def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
+    """Run commands, return results for injection into AI history."""
+    results = []
     for cmd in cmds:
         if RICH:
             console.print(f"\n[bold yellow]▶ {cmd}[/bold yellow]")
@@ -158,14 +160,24 @@ def run_commands(cmds: list[str], autorun: bool = False):
                 confirmed = False
 
         if confirmed:
-            result = subprocess.run(cmd, shell=True)
-            if result.returncode != 0:
+            proc = subprocess.run(cmd, shell=True, text=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            output = proc.stdout or ""
+            if output:
+                print(output, end="")
+            if proc.returncode != 0:
                 if RICH:
-                    console.print(f"[red]Exited with code {result.returncode}[/red]")
+                    console.print(f"[red]Exited with code {proc.returncode}[/red]")
                 else:
-                    print(f"\033[31mExited with code {result.returncode}\033[0m")
+                    print(f"\033[31mExited with code {proc.returncode}\033[0m")
+            results.append({
+                "cmd": cmd,
+                "exit_code": proc.returncode,
+                "output": output[:2000],
+            })
         else:
-            print("Skipped.")
+            results.append({"cmd": cmd, "exit_code": None, "output": ""})
+    return results
 
 
 def print_banner(provider_name: str | None):
@@ -440,7 +452,19 @@ def main():
 
                 cmds = extract_commands(response)
                 if cmds:
-                    run_commands(cmds, autorun=_autorun_this)
+                    results = run_commands(cmds, autorun=_autorun_this)
+                    # Feed command results back into history so AI knows what happened
+                    feedback_lines = ["[command results]"]
+                    for r in results:
+                        if r["exit_code"] is None:
+                            feedback_lines.append(f"  $ {r['cmd']} → skipped by user")
+                        elif r["exit_code"] == 0:
+                            feedback_lines.append(f"  $ {r['cmd']} → success (exit 0)")
+                        else:
+                            feedback_lines.append(f"  $ {r['cmd']} → FAILED (exit {r['exit_code']})")
+                        if r["output"].strip():
+                            feedback_lines.append(f"    output: {r['output'].strip()[:500]}")
+                    history.append(Message("user", "\n".join(feedback_lines)))
 
             except KeyboardInterrupt:
                 if RICH:
