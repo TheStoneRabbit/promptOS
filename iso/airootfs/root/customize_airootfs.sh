@@ -34,26 +34,32 @@ OLLAMA_HOME=/var/lib/ollama
 OLLAMA_MODELS=$OLLAMA_HOME/models
 mkdir -p "$OLLAMA_MODELS"
 
-echo "[promptOS] Pulling base model (dolphin3:8b)..."
-# Start the daemon temporarily, pull the model, then stop it
-OLLAMA_MODELS=$OLLAMA_MODELS OLLAMA_HOST=127.0.0.1:11434 ollama serve &
-OLLAMA_PID=$!
+# Check if model is already cached (copied from Docker volume by docker-build.sh)
+MODEL_MANIFEST="$OLLAMA_MODELS/manifests/registry.ollama.ai/library/dolphin3/8b"
+if [ -f "$MODEL_MANIFEST" ]; then
+    echo "[promptOS] Model dolphin3:8b already cached, skipping pull."
+else
+    echo "[promptOS] Pulling base model (dolphin3:8b)..."
+    # Start the daemon temporarily, pull the model, then stop it
+    OLLAMA_MODELS=$OLLAMA_MODELS OLLAMA_HOST=127.0.0.1:11434 ollama serve &
+    OLLAMA_PID=$!
 
-# Wait for daemon to be ready
-for i in $(seq 1 30); do
-    if curl -sf http://127.0.0.1:11434 >/dev/null 2>&1; then
-        break
-    fi
-    sleep 1
-done
+    # Wait for daemon to be ready
+    for i in $(seq 1 30); do
+        if curl -sf http://127.0.0.1:11434 >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+    done
 
-OLLAMA_MODELS=$OLLAMA_MODELS ollama pull dolphin3:8b
+    OLLAMA_MODELS=$OLLAMA_MODELS ollama pull dolphin3:8b
 
-# Stop daemon cleanly
-kill "$OLLAMA_PID" 2>/dev/null || true
-wait "$OLLAMA_PID" 2>/dev/null || true
+    # Stop daemon cleanly
+    kill "$OLLAMA_PID" 2>/dev/null || true
+    wait "$OLLAMA_PID" 2>/dev/null || true
+fi
 
-echo "[promptOS] Ollama installed with model dolphin3:8b"
+echo "[promptOS] Ollama ready with model dolphin3:8b"
 
 # ── Pre-compile Python bytecode for faster startup ────────────────────────────
 echo "[promptOS] Pre-compiling Python bytecode..."
