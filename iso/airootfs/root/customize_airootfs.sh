@@ -6,8 +6,17 @@ set -euo pipefail
 echo "[promptOS] Running airootfs customization..."
 
 # ── Ollama ────────────────────────────────────────────────────────────────────
-echo "[promptOS] Installing Ollama..."
-curl -fsSL https://ollama.com/install.sh | sh
+# Use cached binary from Docker volume if available, otherwise download
+if [ -f /var/lib/ollama/bin/ollama ]; then
+    echo "[promptOS] Using cached Ollama binary..."
+    install -m755 /var/lib/ollama/bin/ollama /usr/local/bin/ollama
+else
+    echo "[promptOS] Installing Ollama..."
+    curl -fsSL https://ollama.com/install.sh | sh
+    # Cache the binary to the Docker volume for future builds
+    mkdir -p /var/lib/ollama/bin
+    cp /usr/local/bin/ollama /var/lib/ollama/bin/ollama
+fi
 
 # Restore our service file — the install script overwrites it
 cat > /etc/systemd/system/ollama.service << 'EOF'
