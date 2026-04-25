@@ -7,7 +7,7 @@ DIST_DIR="$REPO_ROOT/dist"
 IMAGE_NAME="promptos-builder"
 
 echo "==> Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$REPO_ROOT/Dockerfile.build" "$REPO_ROOT"
+docker build --no-cache -t "$IMAGE_NAME" -f "$REPO_ROOT/Dockerfile.build" "$REPO_ROOT"
 
 echo "==> Running ISO build inside container..."
 mkdir -p "$DIST_DIR"

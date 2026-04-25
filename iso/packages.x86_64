@@ -46,6 +46,7 @@ arch-install-scripts
 parted
 dosfstools
 e2fsprogs
+rsync
 
 # archiso internals (required for live environment)
 archiso

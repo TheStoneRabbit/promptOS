@@ -4,7 +4,7 @@
 
 # Default AI provider: auto | claude | openai | groq | pollinations | ollama
 # "auto" picks the best available: claude > openai > groq > pollinations > ollama
-PROMPTOS_PROVIDER=auto
+PROMPTOS_PROVIDER=ollama
 
 # Ollama model to use when provider=ollama
 PROMPTOS_OLLAMA_MODEL=dolphin3:8b

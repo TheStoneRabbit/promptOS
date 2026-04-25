@@ -15,7 +15,11 @@ import time
 
 sys.path.insert(0, "/usr/local/lib/promptos")
 
+_BARE_TTY = os.environ.get("TERM") == "linux"
+
 try:
+    if _BARE_TTY:
+        raise ImportError("skip rich on bare TTY")
     from rich.console import Console
     from rich.panel import Panel
     from rich.prompt import Prompt, Confirm
@@ -120,19 +124,75 @@ def mount_partitions(efi: str, root: str):
     run(f"mount {efi} {MOUNTPOINT}/boot")
 
 
-def install_base(packages: list[str]):
-    pkg_str = " ".join(packages)
-    run(f"pacstrap -K {MOUNTPOINT} {pkg_str}")
-    # Replace archive/pinned mirrorlist with live mirrors on the installed system
+def install_base():
+    """Copy the live filesystem to the target instead of downloading packages."""
+    # rsync the live root to the mountpoint, excluding virtual/temp filesystems
+    excludes = [
+        "/dev/*", "/proc/*", "/sys/*", "/tmp/*", "/run/*",
+        "/mnt/*", "/media/*", "/lost+found",
+        "/var/cache/pacman/pkg/*",
+    ]
+    # Also exclude /boot — on the live ISO it's a mount point for the ISO boot area,
+    # not the kernel installed by pacstrap. We reinstall the kernel in the chroot instead.
+    excludes.append("/boot/*")
+    exclude_args = " ".join(f'--exclude="{e}"' for e in excludes)
+    run(f"rsync -aAX --info=progress2 --no-inc-recursive {exclude_args} / {MOUNTPOINT}/")
+
+    # Ensure excluded dirs exist as empty mountpoints
+    for d in ["dev", "proc", "sys", "tmp", "run", "mnt", "media"]:
+        os.makedirs(f"{MOUNTPOINT}/{d}", mode=0o755, exist_ok=True)
+
+    # Set up live mirrors on the installed system for future package updates
     live_mirrors = (
+        "Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch\n"
         "Server = https://mirrors.kernel.org/archlinux/$repo/os/$arch\n"
         "Server = https://mirror.rackspace.com/archlinux/$repo/os/$arch\n"
         "Server = https://mirrors.mit.edu/archlinux/$repo/os/$arch\n"
-        "Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch\n"
     )
     os.makedirs(f"{MOUNTPOINT}/etc/pacman.d", exist_ok=True)
     with open(f"{MOUNTPOINT}/etc/pacman.d/mirrorlist", "w") as f:
         f.write(live_mirrors)
+
+    # Initialize pacman keyring on the installed system
+    run(f"arch-chroot {MOUNTPOINT} pacman-key --init")
+    run(f"arch-chroot {MOUNTPOINT} pacman-key --populate archlinux")
+
+    # /boot on the live ISO is overlaid by the ISO boot partition, so rsync misses the kernel.
+    # Try multiple locations to find the kernel and place it at /boot/vmlinuz-linux.
+    import glob
+    kernel_dst = f"{MOUNTPOINT}/boot/vmlinuz-linux"
+    kernel_found = False
+
+    # 1. Check if rsync'd modules dir has the kernel (modern Arch stores it here)
+    candidates = glob.glob(f"{MOUNTPOINT}/usr/lib/modules/*/vmlinuz")
+    if candidates:
+        run(f"cp {candidates[0]} {kernel_dst}")
+        kernel_found = True
+        print(f"  Kernel copied from {candidates[0]}")
+
+    # 2. Try the underlying squashfs airootfs
+    if not kernel_found:
+        airootfs_kernel = "/run/archiso/airootfs/boot/vmlinuz-linux"
+        if os.path.exists(airootfs_kernel):
+            run(f"cp {airootfs_kernel} {kernel_dst}")
+            kernel_found = True
+            print(f"  Kernel copied from {airootfs_kernel}")
+
+    # 3. Try the live /boot (ISO boot area — same kernel, different mount)
+    if not kernel_found:
+        for p in ["/boot/vmlinuz-linux", "/boot/vmlinuz"]:
+            if os.path.isfile(p):
+                run(f"cp {p} {kernel_dst}")
+                kernel_found = True
+                print(f"  Kernel copied from {p}")
+                break
+
+    if not kernel_found:
+        print("  WARNING: Could not find kernel! Listing search paths:")
+        run(f"ls -la {MOUNTPOINT}/usr/lib/modules/", check=False)
+        run("ls -la /run/archiso/airootfs/boot/ 2>/dev/null || echo '  /run/archiso/airootfs/boot not found'", check=False)
+        run("ls -la /boot/", check=False)
+        print("  Install may not boot. Connect to network and run: pacman -S linux")
 
 
 def setup_system(hostname: str, timezone: str, locale: str):
@@ -161,6 +221,23 @@ def setup_system(hostname: str, timezone: str, locale: str):
 
     # Enable services
     run(f"arch-chroot {MOUNTPOINT} systemctl enable NetworkManager sshd", check=False)
+    run(f"arch-chroot {MOUNTPOINT} systemctl enable ollama ollama-warmup", check=False)
+
+    # Replace the live ISO's mkinitcpio.conf with a standard one for installed systems
+    # The live ISO uses archiso hooks which look for the ISO label — that doesn't exist on disk
+    # Skip autodetect so the initramfs includes all modules (works on any hardware)
+    with open(f"{MOUNTPOINT}/etc/mkinitcpio.conf", "w") as f:
+        f.write(
+            "# mkinitcpio.conf for installed promptOS\n"
+            "MODULES=()\n"
+            "BINARIES=()\n"
+            "FILES=()\n"
+            "HOOKS=(base udev modconf block filesystems keyboard fsck)\n"
+        )
+    run(f"arch-chroot {MOUNTPOINT} mkinitcpio -P", check=False)
+
+    # Set promptsh as root's login shell
+    run(f"arch-chroot {MOUNTPOINT} chsh -s /usr/local/bin/promptsh root", check=False)
 
 
 def install_bootloader():
@@ -314,23 +391,14 @@ def main():
     print_step("Mounting Partitions")
     mount_partitions(efi, root)
 
-    print_step("Installing Base System")
-    install_base([
-        "base", "linux", "linux-firmware", "mkinitcpio",
-        "networkmanager", "openssh",
-        "python", "python-pip", "python-rich", "python-prompt_toolkit",
-        "vim", "curl", "wget", "git", "htop", "figlet",
-        "efibootmgr",
-    ])
+    print_step("Copying System (offline)")
+    install_base()
 
     print_step("Configuring System")
     setup_system(hostname, timezone, locale)
 
     print_step("Installing Bootloader")
     install_bootloader()
-
-    print_step("Installing promptOS")
-    install_promptos()
 
     # ── Done ──────────────────────────────────────────────────────────────────
     print_step(

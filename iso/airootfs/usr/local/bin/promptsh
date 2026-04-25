@@ -18,18 +18,25 @@ from providers import get_provider, list_providers, Message
 import providers as _providers_module
 
 # ── Rich + prompt_toolkit (with fallback if not installed) ────────────────────
+# Bare Linux TTY ($TERM=linux) has limited capabilities — rich panels and
+# prompt_toolkit cursor tracking cause screen glitches when scrolling.
+_BARE_TTY = os.environ.get("TERM") == "linux"
+
 try:
     from rich.console import Console
     from rich.markdown import Markdown
     from rich.panel import Panel
     from rich.text import Text
     from rich import box
-    RICH = True
-    console = Console()
+    RICH = not _BARE_TTY
+    console = Console() if RICH else None
 except ImportError:
     RICH = False
+    console = None
 
 try:
+    if _BARE_TTY:
+        raise ImportError("skip prompt_toolkit on bare TTY")
     from prompt_toolkit import PromptSession
     from prompt_toolkit.styles import Style
     from prompt_toolkit.formatted_text import HTML
@@ -54,7 +61,7 @@ PROVIDER_COLORS = {
 
 def _start_spinner(message: str = "Initializing promptOS"):
     stop = threading.Event()
-    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    frames = ["-", "\\", "|", "/"] if _BARE_TTY else ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def _spin():
         i = 0

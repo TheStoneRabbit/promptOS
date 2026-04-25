@@ -3,7 +3,7 @@
 
 iso_name="promptos"
 iso_label="PROMPTOS_$(date +%Y%m)"
-iso_publisher="promptOS <https://github.com/promptOS>"
+iso_publisher="promptOS <https://github.com/TheStoneRabbit/promptOS>"
 iso_application="promptOS — AI-Native Linux"
 iso_version="$(date +%Y.%m.%d)"
 install_dir="arch"

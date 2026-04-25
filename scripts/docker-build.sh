@@ -15,7 +15,13 @@ mkdir -p "$OUTPUT_DIR" "$WORK_DIR"
 echo "[promptOS] Syncing package databases..."
 pacman -Sy --noconfirm --disable-sandbox
 
-# Copy cached Ollama models into airootfs before build (populated by customize_airootfs.sh on first run)
+# Copy cached Ollama binary + models into airootfs before build
+if [ -f "/var/lib/ollama/bin/ollama" ]; then
+    echo "[promptOS] Using cached Ollama binary from volume..."
+    mkdir -p "$PROFILE_DIR/airootfs/usr/local/bin"
+    cp /var/lib/ollama/bin/ollama "$PROFILE_DIR/airootfs/usr/local/bin/ollama"
+    chmod +x "$PROFILE_DIR/airootfs/usr/local/bin/ollama"
+fi
 if [ -d "/var/lib/ollama/models" ] && [ "$(ls -A /var/lib/ollama/models 2>/dev/null)" ]; then
     echo "[promptOS] Using cached Ollama models from volume..."
     mkdir -p "$PROFILE_DIR/airootfs/var/lib/ollama"
@@ -33,7 +39,12 @@ mkarchiso -v \
     -o "$OUTPUT_DIR" \
     "$PROFILE_DIR"
 
-# Cache Ollama models to volume for future builds
+# Cache Ollama binary + models to volume for future builds
+if [ -f "$WORK_DIR/x86_64/airootfs/usr/local/bin/ollama" ] && [ ! -f "/var/lib/ollama/bin/ollama" ]; then
+    echo "[promptOS] Caching Ollama binary to volume..."
+    mkdir -p /var/lib/ollama/bin
+    cp "$WORK_DIR/x86_64/airootfs/usr/local/bin/ollama" /var/lib/ollama/bin/ollama
+fi
 if [ -d "$WORK_DIR/x86_64/airootfs/var/lib/ollama/models" ]; then
     echo "[promptOS] Caching Ollama models to volume..."
     mkdir -p /var/lib/ollama

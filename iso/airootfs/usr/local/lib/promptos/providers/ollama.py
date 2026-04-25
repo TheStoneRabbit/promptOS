@@ -41,7 +41,7 @@ class OllamaProvider(Provider):
             method="POST",
         )
 
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with urllib.request.urlopen(req, timeout=600) as resp:
             if stream:
                 for line in resp:
                     line = line.strip()
