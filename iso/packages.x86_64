@@ -30,6 +30,11 @@ htop
 man-db
 man-pages
 figlet
+terminus-font
+
+# Web tools (AI-callable search + fetch)
+ddgr
+w3m
 
 # Python (AI glue layer)
 python

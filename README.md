@@ -80,19 +80,51 @@ Replace `/dev/sdX` with your USB drive. On macOS use `/dev/diskN`. Or use [Balen
 
 ## Install to Disk
 
-Boot from USB, then at the `promptOS>` prompt:
+Boot from USB, then at the `promptOS>` prompt run any of:
 
 ```
 install promptOS
+/install
 ```
 
 The installer will:
-1. Show available disks and let you pick one
-2. Confirm before erasing anything
+1. Offer to set up WiFi if you're offline (configs persist into the install)
+2. Show available disks and let you pick one (with confirmation before erasing)
 3. Partition automatically (512MiB EFI + rest as root)
-4. Install the base system and copy all promptOS files
-5. Copy the Ollama model — no re-download needed
-6. Set `promptsh` as the login shell and boot into it
+4. Prompt for a root password and an admin user (wheel group, sudo)
+5. Copy the live system to disk, install bootloader, set login shells
+6. Reboot into the installed system
+
+The Ollama model (`qwen2.5:3b`, ~1.9GB) is downloaded on first run, not baked
+into the ISO. Make sure you're online (use `/wifi` if not) and run `/model pull`
+or just send your first AI prompt to trigger the download.
+
+---
+
+## Push Updates to a Running Install
+
+Once promptOS is installed somewhere on your network, you can iterate on
+`promptsh` and the helper scripts without re-flashing the USB:
+
+```bash
+./scripts/push.sh 192.168.1.50              # connects as root@<ip>
+./scripts/push.sh mason@192.168.1.50        # connects as user, uses sudo
+./scripts/push.sh -n 192.168.1.50           # dry-run preview
+```
+
+What it syncs:
+- `usr/local/bin/promptsh` and all `promptos-*` helper scripts
+- `usr/local/lib/promptos/` (provider library + `AGENT.md`)
+- `etc/profile.d/promptsh.sh`, `etc/bash.bashrc`
+- `etc/ssh/sshd_config.d/promptos.conf`, `etc/vconsole.conf`
+
+What it leaves alone (your per-machine state):
+- `/etc/promptos/config` — your provider/model preferences
+- `/etc/promptos/keys` — your API keys
+- `/etc/shadow`, `/etc/passwd` — accounts and credentials
+
+Promptsh changes apply on next login (`exit` and reconnect).
+Console-font changes apply on next boot, or run `setfont $(awk -F= '/^FONT/{print $2}' /etc/vconsole.conf)`.
 
 ---
 
@@ -119,6 +151,20 @@ promptos-keys set groq gsk_...
 /switch ollama
 /switch          # cycle to next available
 ```
+
+---
+
+## Web Search & Fetch
+
+The AI has a built-in web tool (no API key required, uses DuckDuckGo + w3m):
+
+```bash
+promptos-web search "kernel parameter for verbose boot"
+promptos-web fetch  "https://wiki.archlinux.org/title/Mkinitcpio"
+```
+
+The AI can call these from `CMD:` blocks automatically when you ask about
+current events, documentation, or anything outside its training cutoff.
 
 ---
 

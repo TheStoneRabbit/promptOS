@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# promptos-web — small, AI-friendly wrapper around ddgr (search) and w3m (fetch).
+# Designed to produce clean plain-text output that the LLM can read straight from
+# the command results pipeline.
+#
+# Usage:
+#   promptos-web search "<query>"      [--n N]    DuckDuckGo search, top N results (default 5)
+#   promptos-web fetch  "<url>"        [--n N]    Render URL as plain text (head N lines, default 200)
+set -u
+
+cmd="${1:-}"
+shift || true
+
+usage() {
+    cat >&2 <<EOF
+Usage:
+  promptos-web search "<query>" [--n N]   DuckDuckGo search results (top N, default 5)
+  promptos-web fetch  "<url>"   [--n N]   Plain-text render of a page (first N lines, default 200)
+EOF
+}
+
+case "$cmd" in
+    search)
+        if [ $# -lt 1 ]; then usage; exit 1; fi
+        query="$1"; shift
+        n=5
+        if [ "${1:-}" = "--n" ] && [ -n "${2:-}" ]; then n="$2"; fi
+        # --np = no-prompt (one-shot), -x = expand redirect URLs
+        ddgr --np -x -n "$n" -- "$query"
+        ;;
+    fetch)
+        if [ $# -lt 1 ]; then usage; exit 1; fi
+        url="$1"; shift
+        n=200
+        if [ "${1:-}" = "--n" ] && [ -n "${2:-}" ]; then n="$2"; fi
+        # -dump renders without TUI; -cols sets text width
+        w3m -dump -cols 100 "$url" | head -n "$n"
+        ;;
+    ""|-h|--help|help)
+        usage
+        ;;
+    *)
+        echo "Unknown subcommand: $cmd" >&2
+        usage
+        exit 1
+        ;;
+esac

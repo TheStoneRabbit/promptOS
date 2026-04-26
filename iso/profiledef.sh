@@ -22,6 +22,7 @@ file_permissions=(
   ["/usr/local/bin/promptos-keys"]="0:0:755"
   ["/usr/local/bin/promptos-wifi"]="0:0:755"
   ["/usr/local/bin/promptos-model"]="0:0:755"
-  ["/etc/promptos/keys"]="0:0:600"
+  ["/usr/local/bin/promptos-web"]="0:0:755"
+  ["/etc/promptos/keys"]="0:0:644"
   ["/etc/promptos/config"]="0:0:644"
 )

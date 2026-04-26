@@ -1,10 +1,4 @@
-# promptOS root profile
-# Auto-launch promptsh on TTY1 login
-
-export PROMPTOS_MODEL="${PROMPTOS_MODEL:-llama3.2}"
-
-if [ "$(tty)" = "/dev/tty1" ]; then
-    # Offer wifi setup if not already online (no-op when ethernet/saved network is up).
-    [ -x /usr/local/bin/promptos-wifi ] && /usr/local/bin/promptos-wifi --auto
-    exec /usr/local/bin/promptsh
-fi
+# promptOS root profile.
+# The promptsh launcher lives in /etc/profile.d/promptsh.sh, which is sourced
+# by every login bash and handles tty/ssh sessions for all users (root + admin).
+[ -r /etc/profile ] && . /etc/profile

@@ -254,23 +254,67 @@ def install_base():
         raise SystemExit(1)
 
 
-def set_root_password(password: str):
-    """Set the root password inside the chroot. Uses stdin to avoid shell-quoting the password."""
+def set_user_password(user: str, password: str):
+    """Set a user's password inside the chroot. Uses stdin to avoid shell-quoting."""
     proc = subprocess.run(
         ["arch-chroot", MOUNTPOINT, "chpasswd"],
-        input=f"root:{password}\n",
+        input=f"{user}:{password}\n",
         text=True,
         capture_output=True,
     )
     if proc.returncode != 0:
         if RICH:
-            console.print(f"[red]chpasswd failed: {proc.stderr.strip()}[/red]")
+            console.print(f"[red]chpasswd failed for {user}: {proc.stderr.strip()}[/red]")
         else:
-            print(f"chpasswd failed: {proc.stderr.strip()}")
+            print(f"chpasswd failed for {user}: {proc.stderr.strip()}")
         raise SystemExit(1)
 
 
-def setup_system(hostname: str, timezone: str, locale: str, root_password: str):
+def create_admin_user(username: str, password: str):
+    """Create an admin user in the wheel group. Login shell is bash so that
+    graphical session managers (GDM/SDDM) can bootstrap the session correctly;
+    /etc/bash.bashrc auto-execs promptsh for interactive terminal sessions."""
+    # Create the user. `-m` creates /home/<user> from /etc/skel.
+    # `check=False` so a re-run doesn't abort when the user already exists.
+    run(
+        f"arch-chroot {MOUNTPOINT} useradd -m -G wheel -s /bin/bash {username}",
+        check=False,
+    )
+    set_user_password(username, password)
+
+    # Defensive: if useradd skipped home creation (e.g. user existed from a
+    # previous run with -M, or some other edge case), make sure it exists with
+    # the right ownership and perms, populated from /etc/skel.
+    home_dir = f"{MOUNTPOINT}/home/{username}"
+    if not os.path.isdir(home_dir):
+        os.makedirs(home_dir, exist_ok=True)
+        # Copy /etc/skel contents (cp -aT to merge into the existing dir).
+        run(f"arch-chroot {MOUNTPOINT} cp -aT /etc/skel /home/{username}", check=False)
+    run(f"arch-chroot {MOUNTPOINT} chown -R {username}:{username} /home/{username}", check=False)
+    run(f"arch-chroot {MOUNTPOINT} chmod 700 /home/{username}", check=False)
+
+    # Verify the home directory ended up where we expect.
+    if not os.path.isdir(home_dir):
+        if RICH:
+            console.print(f"[red]ERROR: /home/{username} was not created.[/red]")
+        else:
+            print(f"ERROR: /home/{username} was not created.")
+        raise SystemExit(1)
+
+    # Enable wheel-group sudo (Arch ships sudoers with this commented out).
+    sudoers_drop_in = f"{MOUNTPOINT}/etc/sudoers.d/10-wheel"
+    os.makedirs(os.path.dirname(sudoers_drop_in), exist_ok=True)
+    with open(sudoers_drop_in, "w") as f:
+        f.write("%wheel ALL=(ALL:ALL) ALL\n")
+    os.chmod(sudoers_drop_in, 0o440)
+
+    # PAM/GDM exclude root from GUI sessions, so the admin user is also the
+    # account to use for any future graphical desktop installs.
+
+
+def setup_system(hostname: str, timezone: str, locale: str,
+                 root_password: str,
+                 admin_user: str | None = None, admin_password: str | None = None):
     # fstab
     run(f"genfstab -U {MOUNTPOINT} >> {MOUNTPOINT}/etc/fstab")
 
@@ -322,11 +366,18 @@ def setup_system(hostname: str, timezone: str, locale: str, root_password: str):
         run(f"ls -la {MOUNTPOINT}/etc/mkinitcpio.d/", check=False)
         raise SystemExit(1)
 
-    # Set promptsh as root's login shell
-    run(f"arch-chroot {MOUNTPOINT} chsh -s /usr/local/bin/promptsh root", check=False)
+    # Keep root's login shell as bash so it works for GUI session managers
+    # too. /etc/bash.bashrc auto-execs promptsh for interactive shells, so
+    # TTY/SSH still drop you into promptsh.
+    run(f"arch-chroot {MOUNTPOINT} chsh -s /bin/bash root", check=False)
 
     # Set root password (overrides the live ISO's empty-password shadow entry)
-    set_root_password(root_password)
+    set_user_password("root", root_password)
+
+    # Optional admin user (recommended — required for any GUI/desktop session
+    # since GDM/SDDM block root login).
+    if admin_user and admin_password:
+        create_admin_user(admin_user, admin_password)
 
 
 def install_bootloader():
@@ -476,7 +527,7 @@ def main():
     # ── Config ────────────────────────────────────────────────────────────────
     print_step("System Configuration")
     hostname = ask("Hostname", "promptos")
-    timezone = ask("Timezone (e.g. America/New_York)", "UTC")
+    timezone = ask("Timezone", "America/New_York")
     locale   = ask("Locale", "en_US.UTF-8")
 
     # ── Root password ─────────────────────────────────────────────────────────
@@ -485,7 +536,27 @@ def main():
         "Set a password for the root account. You'll use this for SSH\n"
         "and any sudo-equivalent operations on the installed system."
     )
-    root_password = prompt_password()
+    root_password = prompt_password("Root password")
+
+    # ── Admin user ────────────────────────────────────────────────────────────
+    # GDM/SDDM block root login, so a desktop-capable account is needed for any
+    # future GUI work. We always create one and put it in the wheel group.
+    print_step(
+        "Admin User",
+        "Create an admin user (in the wheel group, with sudo access).\n"
+        "This account is required to log into a graphical desktop later —\n"
+        "GNOME/KDE/etc. refuse to run as root."
+    )
+    admin_user = ""
+    while not admin_user:
+        candidate = ask("Admin username", "admin").strip().lower()
+        # Basic sanity: lowercase, starts with letter, alnum/underscore/hyphen
+        import re
+        if re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", candidate) and candidate != "root":
+            admin_user = candidate
+        else:
+            print("Invalid username. Use lowercase letters/digits/_/-, max 32 chars, not 'root'.")
+    admin_password = prompt_password(f"Password for {admin_user}")
 
     # ── Install ───────────────────────────────────────────────────────────────
     print_step(
@@ -504,7 +575,7 @@ def main():
     install_base()
 
     print_step("Configuring System")
-    setup_system(hostname, timezone, locale, root_password)
+    setup_system(hostname, timezone, locale, root_password, admin_user, admin_password)
 
     print_step("Installing Bootloader")
     install_bootloader()

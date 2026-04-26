@@ -127,6 +127,36 @@ def extract_commands(response: str) -> list[str]:
     return cmds
 
 
+def builtin_cd(cmd: str) -> tuple[bool, str]:
+    """Handle the `cd` shell builtin in-process so the cwd actually changes.
+    Returns (ok, message). Supports: `cd`, `cd ~`, `cd ~user`, `cd -`, `cd path`.
+    Does NOT handle compound commands (cd foo && bar) — those still run via shell."""
+    parts = cmd.strip().split(None, 1)
+    target = parts[1].strip() if len(parts) > 1 else "~"
+    if target == "-":
+        target = os.environ.get("OLDPWD", os.getcwd())
+        print(target)  # bash echoes the new dir for `cd -`
+    target = os.path.expanduser(os.path.expandvars(target))
+    try:
+        prev = os.getcwd()
+        os.chdir(target)
+        os.environ["OLDPWD"] = prev
+        os.environ["PWD"] = os.getcwd()
+        return True, os.getcwd()
+    except OSError as e:
+        return False, f"cd: {e}"
+
+
+def is_pure_cd(cmd: str) -> bool:
+    """True if cmd is just `cd ...` with no compound shell operators."""
+    s = cmd.strip()
+    if not (s == "cd" or s.startswith("cd ")):
+        return False
+    # If there's any shell operator, fall back to subprocess (which won't persist
+    # the cwd, but will at least run the rest of the command correctly).
+    return not any(op in s for op in ("&&", "||", ";", "|", ">", "<", "&"))
+
+
 def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
     """Run commands, return results for injection into AI history."""
     results = []
@@ -146,6 +176,19 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
                 confirmed = False
 
         if confirmed:
+            # Intercept `cd` so it actually changes the shell's cwd instead of
+            # running in a child process that exits immediately.
+            if is_pure_cd(cmd):
+                ok, msg = builtin_cd(cmd)
+                if not ok:
+                    print(msg)
+                results.append({
+                    "cmd": cmd,
+                    "exit_code": 0 if ok else 1,
+                    "output": msg,
+                })
+                continue
+
             # Stream output live so the user sees progress as the command runs,
             # while also capturing it to feed back into the AI conversation.
             proc = subprocess.Popen(
@@ -183,6 +226,22 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
     return results
 
 
+def _local_ip() -> str | None:
+    """Best-effort: return the LAN IP used to reach the public internet, or None
+    if offline. Doesn't actually send a packet — just resolves the source address
+    of the route to 1.1.1.1."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(0.5)
+    try:
+        s.connect(("1.1.1.1", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
 def print_banner(provider_name: str | None):
     try:
         logo = subprocess.check_output(
@@ -191,12 +250,15 @@ def print_banner(provider_name: str | None):
     except Exception:
         logo = "promptOS"
 
+    ip = _local_ip()
+
     if RICH:
         color = PROVIDER_COLORS.get(provider_name, "bold white") if provider_name else "bold white"
         provider_str = f"[{color}]{provider_name}[/{color}]" if provider_name else "[yellow]no provider[/yellow]"
+        net_str = f"[bold green]{ip}[/bold green]" if ip else "[yellow]offline[/yellow]"
         console.print(f"[bold cyan]{logo}[/bold cyan]", end="")
         console.print(Panel(
-            f"[dim]AI-Native Linux[/dim]  •  provider: {provider_str}\n"
+            f"[dim]AI-Native Linux[/dim]  •  provider: {provider_str}  •  ip: {net_str}\n"
             f"[dim]/help for commands  •  !cmd for bash  •  exit to quit[/dim]",
             border_style="dim",
             box=box.ROUNDED,
@@ -204,7 +266,8 @@ def print_banner(provider_name: str | None):
     else:
         print(f"\033[1;36m{logo}\033[0m")
         status = f"\033[1;32m{provider_name}\033[0m" if provider_name else "\033[33mno provider\033[0m"
-        print(f"  AI-Native Linux  |  provider: {status}")
+        net = f"\033[1;32m{ip}\033[0m" if ip else "\033[33moffline\033[0m"
+        print(f"  AI-Native Linux  |  provider: {status}  |  ip: {net}")
         print("  /help for commands  |  !cmd to run bash directly  |  exit to quit\n")
 
 
@@ -248,12 +311,27 @@ def print_help():
 """)
 
 
+def _short_cwd() -> str:
+    """Compact cwd for the prompt: '~' for home, '~/foo' for under home, basename otherwise."""
+    cwd = os.getcwd()
+    home = os.path.expanduser("~")
+    if cwd == home:
+        return "~"
+    if cwd.startswith(home + "/"):
+        return "~/" + cwd[len(home) + 1:]
+    return cwd
+
+
 def get_input(session) -> str:
+    cwd = _short_cwd()
     if PROMPT_TOOLKIT:
-        style = Style.from_dict({"prompt": "bold ansigreen"})
-        return session.prompt(HTML("<prompt>promptOS</prompt><ansiwhite>></ansiwhite> "), style=style).strip()
+        style = Style.from_dict({"prompt": "bold ansigreen", "cwd": "ansiblue"})
+        return session.prompt(
+            HTML(f"<prompt>promptOS</prompt> <cwd>{cwd}</cwd><ansiwhite>></ansiwhite> "),
+            style=style,
+        ).strip()
     else:
-        return input("\001\033[1;32m\002promptOS>\001\033[0m\002 ").strip()
+        return input(f"\001\033[1;32m\002promptOS\001\033[0m\002 \001\033[1;34m\002{cwd}\001\033[0m\002> ").strip()
 
 
 def render_response(text: str, provider_name: str):
@@ -302,7 +380,45 @@ def _print_model_missing_notice():
         print("  Or use cloud:     /setup\n")
 
 
+def _handle_shell_invocation():
+    """Handle shell-style invocation when promptsh is set as a login shell.
+    SSH non-interactive commands (`ssh host "cmd"`), rsync, ssh-copy-id, scripts,
+    etc., all invoke the login shell as `<shell> -c "cmd"`. Without this,
+    promptsh would just start a REPL and hang or ignore the command.
+
+    Supported:
+      promptsh -c "cmd [args...]"   → run cmd via /bin/bash, exit with its rc
+      promptsh --version            → print version, exit
+      promptsh --help               → print usage, exit
+    Unknown flags (-i, -l, --noprofile, etc.) are silently ignored — they're
+    standard for interactive shells and don't change anything for us.
+    """
+    argv = sys.argv[1:]
+    if not argv:
+        return
+    if argv[0] in ("--help", "-h"):
+        print("Usage: promptsh [-c CMD] [-i] [-l]\n"
+              "  -c CMD    run CMD via bash and exit (shell-style)\n"
+              "  -i, -l    interactive / login (default behavior)\n"
+              "  --help    show this and exit")
+        sys.exit(0)
+    if argv[0] == "--version":
+        print("promptsh 0.2")
+        sys.exit(0)
+    if "-c" in argv:
+        idx = argv.index("-c")
+        if idx + 1 >= len(argv):
+            print("promptsh: -c: option requires an argument", file=sys.stderr)
+            sys.exit(2)
+        cmd = argv[idx + 1]
+        # Pass remaining args through as $0, $1, ... like bash does for -c.
+        bash_args = ["/bin/bash", "-c", cmd, *argv[idx + 2:]]
+        sys.exit(subprocess.run(bash_args).returncode)
+    # Anything else (-i, -l, --noprofile, …) → fall through to interactive REPL.
+
+
 def main():
+    _handle_shell_invocation()
     load_config()
 
     # Set up input session
@@ -365,8 +481,15 @@ def main():
                 _autorun_this = autorun
 
             if user_input.startswith("!"):
+                bash_cmd = user_input[1:]
+                # Intercept `cd` so it persists across commands.
+                if is_pure_cd(bash_cmd):
+                    ok, msg = builtin_cd(bash_cmd)
+                    if not ok:
+                        print(msg)
+                    continue
                 try:
-                    subprocess.run(user_input[1:], shell=True)
+                    subprocess.run(bash_cmd, shell=True)
                 except KeyboardInterrupt:
                     print()
                 continue
@@ -529,32 +652,35 @@ def main():
                     print("\033[2mProcessing first prompt — please wait (10-30s on slow CPUs); subsequent prompts will be much faster.\033[0m")
                 ollama_warmed = True
 
+            # Loop: AI may emit commands → we run them → feed results back → ask AI
+            # again to interpret/continue. Capped to keep the AI from spinning forever.
+            MAX_AGENT_TURNS = 15
+            agent_turn = 0
             try:
-                # Stream response, collect chunks
-                if RICH:
-                    color = PROVIDER_COLORS.get(active_provider.name, "bold white")
-                    console.print(f"\n[{color}][{active_provider.name}][/{color}] ", end="")
-                else:
-                    print(f"\n\033[90m[{active_provider.name}]\033[0m ", end="", flush=True)
+                while True:
+                    # Stream response, collect chunks
+                    if RICH:
+                        color = PROVIDER_COLORS.get(active_provider.name, "bold white")
+                        console.print(f"\n[{color}][{active_provider.name}][/{color}] ", end="")
+                    else:
+                        print(f"\n\033[90m[{active_provider.name}]\033[0m ", end="", flush=True)
 
-                response_chunks = []
-                for chunk in active_provider.chat(history, stream=True):
-                    print(chunk, end="", flush=True)
-                    response_chunks.append(chunk)
+                    response_chunks = []
+                    for chunk in active_provider.chat(history, stream=True):
+                        print(chunk, end="", flush=True)
+                        response_chunks.append(chunk)
 
-                response = "".join(response_chunks)
-                print("\n")
+                    response = "".join(response_chunks)
+                    print("\n")
 
-                # Re-render with rich markdown if available
-                if RICH and response_chunks:
-                    # Clear the streamed text and re-render as markdown
-                    # (move up and reprint — only if terminal supports it)
-                    pass  # streaming already printed; markdown re-render on next response
+                    history.append(Message("assistant", response))
 
-                history.append(Message("assistant", response))
+                    cmds = extract_commands(response)
+                    if not cmds:
+                        # AI didn't emit any commands — task is finished or it's
+                        # just talking. Hand control back to the user.
+                        break
 
-                cmds = extract_commands(response)
-                if cmds:
                     results = run_commands(cmds, autorun=_autorun_this)
                     # Feed command results back into history so AI knows what happened
                     feedback_lines = ["[command results]"]
@@ -568,6 +694,19 @@ def main():
                         if r["output"].strip():
                             feedback_lines.append(f"    output: {r['output'].strip()[:500]}")
                     history.append(Message("user", "\n".join(feedback_lines)))
+
+                    # If the user skipped every command, the AI has nothing new to
+                    # work with — break instead of looping forever on stale input.
+                    if all(r["exit_code"] is None for r in results):
+                        break
+
+                    agent_turn += 1
+                    if agent_turn >= MAX_AGENT_TURNS:
+                        if RICH:
+                            console.print(f"[yellow]Reached {MAX_AGENT_TURNS}-turn auto-loop limit. Type 'continue' to keep going.[/yellow]\n")
+                        else:
+                            print(f"\033[33mReached {MAX_AGENT_TURNS}-turn auto-loop limit. Type 'continue' to keep going.\033[0m\n")
+                        break
 
             except KeyboardInterrupt:
                 if RICH:

@@ -14,7 +14,6 @@ Providers: claude | openai | groq
 
 import os
 import sys
-import stat
 import getpass
 
 KEYS_FILE = "/etc/promptos/keys"
@@ -48,11 +47,18 @@ def load_kv(path: str) -> dict[str, str]:
 
 def save_keys(keys: dict[str, str]):
     os.makedirs(os.path.dirname(KEYS_FILE), exist_ok=True)
+    # Parent dir needs to be traversable by all users so they can read keys.
+    try:
+        os.chmod(os.path.dirname(KEYS_FILE), 0o755)
+    except OSError:
+        pass
     with open(KEYS_FILE, "w") as f:
         f.write("# promptOS API keys — do not share this file\n")
         for k, v in keys.items():
             f.write(f"{k}={v}\n")
-    os.chmod(KEYS_FILE, stat.S_IRUSR | stat.S_IWUSR)  # 600
+    # Mode 644: any user account can read API keys (single-user OS assumption).
+    # If you want to restrict, change to 0o640 and group-own with a `promptos` group.
+    os.chmod(KEYS_FILE, 0o644)
 
 
 def set_config_value(key: str, value: str):
