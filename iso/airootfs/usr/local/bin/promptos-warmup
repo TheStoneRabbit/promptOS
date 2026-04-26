@@ -1,15 +1,30 @@
 #!/usr/bin/env bash
-# promptos-warmup — pre-loads the Ollama model into RAM at boot
+# promptos-warmup — ensure the configured Ollama model is installed and pre-loaded
 # Runs as a systemd service before the user logs in.
 
-MODEL="${PROMPTOS_OLLAMA_MODEL:-dolphin3:8b}"
-BASE_URL="${PROMPTOS_OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
+CONFIG=/etc/promptos/config
+MODEL=$(awk -F= '/^PROMPTOS_OLLAMA_MODEL/{gsub(/[ \r\n]/,"",$2); print $2}' "$CONFIG" 2>/dev/null)
+MODEL=${MODEL:-qwen2.5:3b}
+BASE_URL=$(awk -F= '/^PROMPTOS_OLLAMA_BASE_URL/{gsub(/[ \r\n]/,"",$2); print $2}' "$CONFIG" 2>/dev/null)
+BASE_URL=${BASE_URL:-http://127.0.0.1:11434}
 
 echo "[promptOS] Waiting for Ollama to be ready..."
 for i in $(seq 1 30); do
     curl -sf "${BASE_URL}/api/tags" > /dev/null && break
     sleep 2
 done
+
+# Try to download the model if it's missing — silent failure if offline so boot
+# isn't blocked. promptsh will surface the "needs wifi" message on first prompt.
+if command -v promptos-model >/dev/null 2>&1; then
+    promptos-model ensure || true
+fi
+
+# Skip warmup if the model still isn't installed.
+if ! ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$MODEL"; then
+    echo "[promptOS] Model $MODEL not installed — skipping warmup."
+    exit 0
+fi
 
 echo "[promptOS] Pre-loading model ${MODEL} into RAM..."
 # Retry loop — Ollama may return 500 while the runner is still starting

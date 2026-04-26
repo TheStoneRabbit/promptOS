@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# promptos-model — manage the local Ollama model
+# Usage:
+#   promptos-model status       print current model + whether it's installed
+#   promptos-model pull          download the configured model (needs internet)
+#   promptos-model ensure        download only if missing; warn if offline
+set -u
+
+CONFIG=/etc/promptos/config
+MODEL=$(awk -F= '/^PROMPTOS_OLLAMA_MODEL/{gsub(/[ \r\n]/,"",$2); print $2}' "$CONFIG" 2>/dev/null)
+MODEL=${MODEL:-qwen2.5:3b}
+BASE_URL=$(awk -F= '/^PROMPTOS_OLLAMA_BASE_URL/{gsub(/[ \r\n]/,"",$2); print $2}' "$CONFIG" 2>/dev/null)
+BASE_URL=${BASE_URL:-http://127.0.0.1:11434}
+
+GREEN=$'\033[1;32m'
+YELLOW=$'\033[1;33m'
+RED=$'\033[1;31m'
+DIM=$'\033[2m'
+RESET=$'\033[0m'
+
+is_online() {
+    if command -v nm-online >/dev/null 2>&1 && nm-online -q --timeout=2; then
+        return 0
+    fi
+    curl -sf --max-time 3 http://detectportal.firefox.com/success.txt >/dev/null 2>&1
+}
+
+is_installed() {
+    # Use ollama list to check; fall back to a direct manifest path check
+    if command -v ollama >/dev/null 2>&1; then
+        ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$MODEL" && return 0
+    fi
+    local family tag manifest
+    family="${MODEL%%:*}"
+    tag="${MODEL##*:}"
+    manifest="/var/lib/ollama/models/manifests/registry.ollama.ai/library/${family}/${tag}"
+    [ -f "$manifest" ]
+}
+
+wait_daemon() {
+    local i
+    for i in $(seq 1 30); do
+        curl -sf "${BASE_URL}/api/tags" >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    return 1
+}
+
+cmd_status() {
+    echo "  Model:  $MODEL"
+    echo -n "  State:  "
+    if is_installed; then
+        echo "${GREEN}installed${RESET}"
+    else
+        echo "${YELLOW}not installed${RESET}"
+    fi
+    echo -n "  Net:    "
+    if is_online; then
+        echo "${GREEN}online${RESET}"
+    else
+        echo "${YELLOW}offline${RESET}  (use ${DIM}/wifi${RESET} from promptsh to connect)"
+    fi
+}
+
+cmd_pull() {
+    if ! wait_daemon; then
+        echo "${RED}Ollama daemon isn't responding at ${BASE_URL}.${RESET}" >&2
+        echo "${DIM}Try: systemctl status ollama${RESET}" >&2
+        exit 1
+    fi
+    if ! is_online; then
+        echo "${YELLOW}No internet connection.${RESET}"
+        echo "Connect WiFi first by running ${GREEN}/wifi${RESET} from promptsh,"
+        echo "then re-run: ${GREEN}promptos-model pull${RESET}"
+        exit 2
+    fi
+    echo "${DIM}Downloading $MODEL...${RESET}"
+    ollama pull "$MODEL"
+}
+
+cmd_ensure() {
+    if is_installed; then
+        exit 0
+    fi
+    if ! is_online; then
+        echo "${YELLOW}AI model '$MODEL' is not installed and you're offline.${RESET}"
+        echo "Run ${GREEN}/wifi${RESET} from promptsh to connect, then it will download automatically."
+        exit 2
+    fi
+    cmd_pull
+}
+
+case "${1:-status}" in
+    status) cmd_status ;;
+    pull)   cmd_pull ;;
+    ensure) cmd_ensure ;;
+    *)
+        echo "Usage: promptos-model {status|pull|ensure}" >&2
+        exit 1
+        ;;
+esac

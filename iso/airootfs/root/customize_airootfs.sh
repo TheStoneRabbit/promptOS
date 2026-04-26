@@ -37,37 +37,11 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-# Set model storage path
+# Set up model storage path (empty — model is downloaded on first run, not baked in).
 OLLAMA_HOME=/var/lib/ollama
 OLLAMA_MODELS=$OLLAMA_HOME/models
 mkdir -p "$OLLAMA_MODELS"
-
-# Check if model is already cached (copied from Docker volume by docker-build.sh)
-MODEL_MANIFEST="$OLLAMA_MODELS/manifests/registry.ollama.ai/library/qwen2.5/3b"
-if [ -f "$MODEL_MANIFEST" ]; then
-    echo "[promptOS] Model qwen2.5:3b already cached, skipping pull."
-else
-    echo "[promptOS] Pulling base model (qwen2.5:3b)..."
-    # Start the daemon temporarily, pull the model, then stop it
-    OLLAMA_MODELS=$OLLAMA_MODELS OLLAMA_HOST=127.0.0.1:11434 ollama serve &
-    OLLAMA_PID=$!
-
-    # Wait for daemon to be ready
-    for i in $(seq 1 30); do
-        if curl -sf http://127.0.0.1:11434 >/dev/null 2>&1; then
-            break
-        fi
-        sleep 1
-    done
-
-    OLLAMA_MODELS=$OLLAMA_MODELS ollama pull qwen2.5:3b
-
-    # Stop daemon cleanly
-    kill "$OLLAMA_PID" 2>/dev/null || true
-    wait "$OLLAMA_PID" 2>/dev/null || true
-fi
-
-echo "[promptOS] Ollama ready with model qwen2.5:3b"
+echo "[promptOS] Ollama installed; default model (qwen2.5:3b) will download on first run."
 
 # ── Register promptsh as a valid login shell ─────────────────────────────────
 # PAM rejects logins (including SSH) whose shell isn't listed in /etc/shells.

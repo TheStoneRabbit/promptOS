@@ -146,11 +146,28 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
                 confirmed = False
 
         if confirmed:
-            proc = subprocess.run(cmd, shell=True, text=True,
-                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            output = proc.stdout or ""
-            if output:
-                print(output, end="")
+            # Stream output live so the user sees progress as the command runs,
+            # while also capturing it to feed back into the AI conversation.
+            proc = subprocess.Popen(
+                cmd, shell=True, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                bufsize=1,  # line-buffered
+            )
+            output_chunks: list[str] = []
+            try:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    print(line, end="", flush=True)
+                    output_chunks.append(line)
+            except KeyboardInterrupt:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                print()
+            proc.wait()
+            output = "".join(output_chunks)
             if proc.returncode != 0:
                 if RICH:
                     console.print(f"[red]Exited with code {proc.returncode}[/red]")
@@ -203,6 +220,8 @@ def print_help():
             "  [cyan]/setup[/cyan]             — interactive: pick a provider + paste API key\n"
             "  [cyan]/keys[/cyan]              — show stored API keys\n"
             "  [cyan]/wifi[/cyan]              — connect to a WiFi network\n"
+            "  [cyan]/model[/cyan]             — manage the local Ollama model (status / pull / ensure)\n"
+            "  [cyan]/install[/cyan]           — install promptOS to disk\n"
             "  [cyan]!\\<cmd>[/cyan]             — run bash command directly\n"
             "  [cyan]!!\\<prompt>[/cyan]          — send to AI and auto-run any commands it suggests\n"
             "  [cyan]exit / quit[/cyan]        — exit promptsh",
@@ -221,6 +240,8 @@ def print_help():
     /setup              — interactive: pick a provider + paste API key
     /keys               — show stored API keys
     /wifi               — connect to a WiFi network
+    /model [pull]       — show local model status (or pull if missing)
+    /install            — install promptOS to disk
     !<cmd>              — run a bash command directly, bypassing AI
     !!<prompt>          — send to AI and auto-run any commands it suggests
     exit / quit         — exit promptsh
@@ -247,6 +268,40 @@ def render_response(text: str, provider_name: str):
         print()
 
 
+def _ollama_model_installed() -> bool:
+    """Quick check if the configured ollama model is downloaded locally."""
+    try:
+        out = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout
+    except Exception:
+        return False
+    target = os.environ.get("PROMPTOS_OLLAMA_MODEL", "qwen2.5:3b")
+    for line in out.splitlines()[1:]:
+        if line.split()[:1] == [target]:
+            return True
+    return False
+
+
+def _print_model_missing_notice():
+    target = os.environ.get("PROMPTOS_OLLAMA_MODEL", "qwen2.5:3b")
+    if RICH:
+        console.print(Panel(
+            f"[yellow]Local model [bold]{target}[/bold] is not yet installed.[/yellow]\n\n"
+            f"  • Connect to wifi: [cyan]/wifi[/cyan]\n"
+            f"  • Then download:   [cyan]/model pull[/cyan]\n\n"
+            f"[dim]Or use a cloud provider instead: [cyan]/setup[/cyan][/dim]",
+            border_style="yellow",
+            box=box.ROUNDED,
+        ))
+    else:
+        print(f"\n\033[33mLocal model {target} is not yet installed.\033[0m")
+        print("  Connect to wifi:  /wifi")
+        print("  Then download:    /model pull")
+        print("  Or use cloud:     /setup\n")
+
+
 def main():
     load_config()
 
@@ -266,9 +321,15 @@ def main():
 
     print_banner(provider.name if provider else None)
 
+    # If ollama is the active provider but the model isn't downloaded yet,
+    # show a clear notice with the path to fix it.
+    if provider and provider.name == "ollama" and not _ollama_model_installed():
+        _print_model_missing_notice()
+
     history: list[Message] = [Message("system", get_system_prompt())]
     active_provider = provider
     autorun = AUTORUN
+    ollama_warmed = False  # show a one-time "loading model" notice on first ollama prompt
 
     def save_history():
         if not PROMPT_TOOLKIT:
@@ -311,7 +372,7 @@ def main():
                 continue
 
             # Intercept install trigger before AI sees it
-            if user_input.lower().strip() in ("install promptos", "install prompts"):
+            if user_input.lower().strip() in ("/install", "install promptos", "install prompts"):
                 try:
                     subprocess.run(["promptos-install"])
                 except KeyboardInterrupt:
@@ -437,6 +498,17 @@ def main():
                     print("  promptos-wifi not installed.\n")
                 continue
 
+            if user_input.startswith("/model"):
+                parts = user_input.split(None, 1)
+                sub = parts[1].strip() if len(parts) > 1 else "status"
+                try:
+                    subprocess.run(["promptos-model", sub])
+                except KeyboardInterrupt:
+                    print()
+                except FileNotFoundError:
+                    print("  promptos-model not installed.\n")
+                continue
+
             if not active_provider:
                 if RICH:
                     console.print("[red]No AI provider available. Set an API key with /keys or start ollama.[/red]")
@@ -445,6 +517,17 @@ def main():
                 continue
 
             history.append(Message("user", user_input))
+
+            # First-prompt warning for ollama: the system prompt is large, so the
+            # first request pays a significant prompt-processing cost on CPU
+            # (10-30s on a 4-core laptop CPU). Subsequent prompts reuse the cache
+            # and feel snappy. Tell the user to be patient.
+            if active_provider.name == "ollama" and not ollama_warmed:
+                if RICH:
+                    console.print("[dim]Processing first prompt — please wait, this can take 10-30s on slow CPUs (subsequent prompts will be much faster).[/dim]")
+                else:
+                    print("\033[2mProcessing first prompt — please wait (10-30s on slow CPUs); subsequent prompts will be much faster.\033[0m")
+                ollama_warmed = True
 
             try:
                 # Stream response, collect chunks
