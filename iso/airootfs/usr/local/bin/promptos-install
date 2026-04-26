@@ -402,6 +402,62 @@ def install_bootloader():
         )
 
 
+def install_gnome():
+    """Install GNOME desktop and enable GDM. Requires internet because the
+    packages aren't on the live ISO — pacman pulls them from Arch mirrors."""
+    if not is_online():
+        if RICH:
+            console.print("[yellow]Skipping GNOME install — you're offline.[/yellow]")
+            console.print("[dim]Run later (after first boot, when online):[/dim]")
+            console.print("[dim]  pacman -S --noconfirm gnome gdm gnome-backgrounds && systemctl enable gdm[/dim]")
+        else:
+            print("Skipping GNOME install — you're offline.")
+            print("Run later: pacman -S --noconfirm gnome gdm gnome-backgrounds && systemctl enable gdm")
+        return
+
+    print_step(
+        "Installing GNOME",
+        "This pulls ~1.5 GB of packages from Arch mirrors and may take 10-20 minutes."
+    )
+    # Bind /etc/resolv.conf into the chroot so DNS works for pacman.
+    run(f"cp /etc/resolv.conf {MOUNTPOINT}/etc/resolv.conf", check=False)
+    # Refresh package databases first.
+    run(f"arch-chroot {MOUNTPOINT} pacman -Sy --noconfirm", check=False)
+    # Install gnome group + gdm + default backgrounds. `gnome-extra` is intentionally
+    # left out — it adds another ~3 GB of apps most users don't want.
+    rc = run(
+        f"arch-chroot {MOUNTPOINT} pacman -S --noconfirm gnome gdm gnome-backgrounds",
+        check=False,
+    )
+    if rc != 0:
+        if RICH:
+            console.print("[red]GNOME install failed.[/red] You can retry after first boot:")
+            console.print("[dim]  pacman -S --noconfirm gnome gdm gnome-backgrounds[/dim]")
+        else:
+            print("GNOME install failed. Retry after first boot:")
+            print("  pacman -S --noconfirm gnome gdm gnome-backgrounds")
+        return
+
+    # Enable GDM so it starts on boot.
+    run(f"arch-chroot {MOUNTPOINT} systemctl enable gdm.service", check=False)
+
+    # Compile the dconf db so the promptOS wallpaper becomes the default
+    # for all new GNOME sessions. (Existing users would need to re-login.)
+    run(f"arch-chroot {MOUNTPOINT} dconf update", check=False)
+
+    # Disable the TTY1 autologin override so GDM (on tty1) doesn't conflict
+    # with the bare-tty getty.
+    run(
+        f"rm -f {MOUNTPOINT}/etc/systemd/system/getty@tty1.service.d/autologin.conf",
+        check=False,
+    )
+
+    if RICH:
+        console.print("[green]GNOME installed and GDM enabled.[/green] Log in as your admin user.")
+    else:
+        print("GNOME installed and GDM enabled. Log in as your admin user.")
+
+
 def install_promptos():
     """Copy promptOS files into the installed system."""
     copies = [
@@ -558,6 +614,21 @@ def main():
             print("Invalid username. Use lowercase letters/digits/_/-, max 32 chars, not 'root'.")
     admin_password = prompt_password(f"Password for {admin_user}")
 
+    # ── Optional desktop environment ──────────────────────────────────────────
+    install_gnome_choice = False
+    print_step(
+        "Desktop Environment (optional)",
+        "GNOME provides a graphical desktop. Requires internet (~1.5 GB download).\n"
+        "Skip this if you only want the AI shell — you can install it later."
+    )
+    if is_online():
+        install_gnome_choice = confirm("Install GNOME desktop after the base install?", default=False)
+    else:
+        if RICH:
+            console.print("[yellow]Offline — skipping GNOME prompt. Install later with: pacman -S gnome gdm[/yellow]")
+        else:
+            print("Offline — skipping GNOME prompt. Install later with: pacman -S gnome gdm")
+
     # ── Install ───────────────────────────────────────────────────────────────
     print_step(
         "Installing",
@@ -579,6 +650,9 @@ def main():
 
     print_step("Installing Bootloader")
     install_bootloader()
+
+    if install_gnome_choice:
+        install_gnome()
 
     # ── Done ──────────────────────────────────────────────────────────────────
     print_step(

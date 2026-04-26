@@ -1,0 +1,14 @@
+[org/gnome/desktop/background]
+picture-uri='file:///usr/share/backgrounds/promptos/wallpaper.png'
+picture-uri-dark='file:///usr/share/backgrounds/promptos/wallpaper.png'
+picture-options='zoom'
+primary-color='#000000'
+secondary-color='#000000'
+
+[org/gnome/desktop/screensaver]
+picture-uri='file:///usr/share/backgrounds/promptos/wallpaper.png'
+picture-options='zoom'
+primary-color='#000000'
+
+# Note: GDM login-screen settings are in /etc/dconf/db/gdm.d/, NOT here —
+# the greeter uses a different dconf profile.

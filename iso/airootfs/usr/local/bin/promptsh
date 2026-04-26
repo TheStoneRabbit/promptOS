@@ -8,6 +8,8 @@ Type /help for commands.
 import os
 import sys
 import subprocess
+import time
+import getpass
 
 # Add promptOS library to path
 sys.path.insert(0, "/usr/local/lib/promptos")
@@ -25,6 +27,7 @@ try:
     from rich.markdown import Markdown
     from rich.panel import Panel
     from rich.text import Text
+    from rich.live import Live
     from rich import box
     RICH = not _BARE_TTY
     console = Console() if RICH else None
@@ -39,14 +42,16 @@ try:
     from prompt_toolkit.styles import Style
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.completion import Completer, Completion
     PROMPT_TOOLKIT = True
 except ImportError:
     import readline
     PROMPT_TOOLKIT = False
 
-HISTORY_FILE = os.path.expanduser("~/.promptsh_history")
-AGENT_MD = "/usr/local/lib/promptos/AGENT.md"
-AUTORUN = False  # set True to skip CMD: confirmation prompts
+HISTORY_FILE  = os.path.expanduser("~/.promptsh_history")
+SESSIONS_DIR  = os.path.expanduser("~/.promptsh/sessions")
+AGENT_MD      = "/usr/local/lib/promptos/AGENT.md"
+AUTORUN       = False  # set True to skip CMD: confirmation prompts
 
 PROVIDER_COLORS = {
     "claude":       "bold magenta",
@@ -64,15 +69,172 @@ def _load_agent_md() -> str:
         return ""
 
 
+# ── Session memory ────────────────────────────────────────────────────────────
+# Saved conversations live as JSON files under ~/.promptsh/sessions/.
+# Each file is a list of {role, content} message dicts.
+import json as _json
+
+
+def _safe_session_name(name: str) -> str:
+    """Make a name filesystem-safe (allow letters/digits/_/-, replace others)."""
+    keep = "_-."
+    out = "".join(c if (c.isalnum() or c in keep) else "_" for c in name).strip("_")
+    return out or "session"
+
+
+def _session_path(name: str) -> str:
+    return os.path.join(SESSIONS_DIR, _safe_session_name(name) + ".json")
+
+
+def save_session(name: str, history: list) -> str:
+    """Serialize history to JSON. Returns the saved path."""
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    path = _session_path(name)
+    data = [{"role": m.role, "content": m.content} for m in history]
+    with open(path, "w") as f:
+        _json.dump(data, f, indent=2)
+    return path
+
+
+def load_session(name: str) -> list:
+    """Load a saved session and return a list of Message objects."""
+    path = _session_path(name)
+    with open(path) as f:
+        data = _json.load(f)
+    return [Message(d["role"], d["content"]) for d in data]
+
+
+def list_sessions() -> list[tuple[str, int, int]]:
+    """Return [(name, message_count, mtime_epoch), ...] sorted newest first."""
+    if not os.path.isdir(SESSIONS_DIR):
+        return []
+    out = []
+    for f in os.listdir(SESSIONS_DIR):
+        if not f.endswith(".json"):
+            continue
+        path = os.path.join(SESSIONS_DIR, f)
+        try:
+            with open(path) as fh:
+                count = len(_json.load(fh))
+            mtime = int(os.path.getmtime(path))
+        except (OSError, _json.JSONDecodeError):
+            count, mtime = 0, 0
+        out.append((f[:-5], count, mtime))
+    out.sort(key=lambda t: t[2], reverse=True)
+    return out
+
+
+def forget_session(name: str) -> bool:
+    """Delete a saved session. Returns True if deleted, False if didn't exist."""
+    path = _session_path(name)
+    if os.path.isfile(path):
+        os.remove(path)
+        return True
+    return False
+
+
+# ── Tab completion ────────────────────────────────────────────────────────────
+# When the line starts with `!`, complete bash command names (first token) or
+# filesystem paths (subsequent tokens). Otherwise no completion.
+
+_PATH_CMD_CACHE: list[str] = []
+
+
+def _path_commands() -> list[str]:
+    global _PATH_CMD_CACHE
+    if _PATH_CMD_CACHE:
+        return _PATH_CMD_CACHE
+    seen = set()
+    for d in os.environ.get("PATH", "").split(":"):
+        if not d:
+            continue
+        try:
+            for f in os.listdir(d):
+                seen.add(f)
+        except OSError:
+            pass
+    _PATH_CMD_CACHE = sorted(seen)
+    return _PATH_CMD_CACHE
+
+
+def _complete_path(prefix: str) -> list[str]:
+    """Return filesystem completions for `prefix`."""
+    expanded = os.path.expanduser(prefix) if prefix else ""
+    if not expanded:
+        dirname, base = ".", ""
+    elif expanded.endswith("/"):
+        dirname, base = expanded, ""
+    else:
+        dirname = os.path.dirname(expanded) or "."
+        base = os.path.basename(expanded)
+    try:
+        names = sorted(os.listdir(dirname))
+    except OSError:
+        return []
+    out = []
+    for n in names:
+        if not n.startswith(base):
+            continue
+        full = os.path.join(dirname, n) if dirname != "." else n
+        if os.path.isdir(os.path.join(dirname, n)):
+            full += "/"
+        out.append(full)
+    return out
+
+
+def _readline_completer(text: str, state: int):
+    """readline completer: only fires when the line starts with `!`."""
+    line = readline.get_line_buffer()
+    if not line.startswith("!"):
+        return None
+    cmd_line = line[1:]
+    # First token = command name; later tokens = paths.
+    if " " not in cmd_line.lstrip():
+        matches = [c for c in _path_commands() if c.startswith(text)]
+    else:
+        matches = _complete_path(text)
+    if state < len(matches):
+        return matches[state]
+    return None
+
+
+if PROMPT_TOOLKIT:
+    class _BangCompleter(Completer):
+        """prompt_toolkit completer: only fires when the line starts with `!`.
+        First token completes against $PATH binaries; later tokens against
+        the filesystem."""
+        def get_completions(self, document, complete_event):
+            text = document.text_before_cursor
+            if not text.startswith("!"):
+                return
+            cmd_line = text[1:]
+            # Word being completed (everything after the last whitespace)
+            tail = cmd_line.split()[-1] if cmd_line and not cmd_line.endswith(" ") else ""
+            if " " not in cmd_line.lstrip():
+                pool = [c for c in _path_commands() if c.startswith(tail)]
+            else:
+                pool = _complete_path(tail)
+            for match in pool:
+                yield Completion(match, start_position=-len(tail))
+
+
 SYSTEM_PROMPT_SUFFIX = """
 ---
-## Current System Context
+## Current System Context (snapshot at session start)
 - OS: promptOS (Arch Linux based)
 - Shell: promptsh
-- User: root
+- User: {user} (uid {uid}, {priv})
+- Home: {home}
+- CWD: {cwd}
 - Hostname: {hostname}
 - Uptime: {uptime}
 - Disk: {disk}
+- Date/time at session start: {now} ({tz})
+
+NOTE: The values above are a one-time snapshot. For anything that changes
+during the session (current time, uptime, disk usage, network status, etc.),
+run a command (`date`, `uptime`, `df -h`, `ip a`) instead of trusting the
+snapshot. The user's CWD also changes when they run `cd`.
 """
 
 
@@ -101,29 +263,84 @@ def get_system_prompt() -> str:
             shell=True, text=True).strip()
     except Exception:
         disk = "unknown"
+    try:
+        uid = os.geteuid()
+    except Exception:
+        uid = -1
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = os.environ.get("USER", "unknown")
+    priv = "root/full system access" if uid == 0 else "regular user — sudo for elevated commands"
+    home = os.path.expanduser("~")
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        cwd = "?"
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    tz = time.strftime("%Z%z")
     agent = _load_agent_md()
     suffix = SYSTEM_PROMPT_SUFFIX.format(
+        user=user,
+        uid=uid,
+        priv=priv,
+        home=home,
+        cwd=cwd,
         hostname=socket.gethostname(),
         uptime=uptime,
         disk=disk,
+        now=now,
+        tz=tz,
     )
     return agent + suffix
 
 
 def extract_commands(response: str) -> list[str]:
-    cmds = []
+    r"""Extract executable commands from an AI response.
+    Only commands explicitly marked with `CMD:` are run. Standalone code blocks
+    are never executed — they're for the AI to show examples / sample output.
+
+    Handles three formats the AI tends to emit:
+      1. `CMD: ls -la`              — simple inline form (canonical)
+      2. `CMD: \`ls -la\``           — wrapped in backticks
+      3. `CMD: \`\`\`bash`             — code-fence after CMD:, command(s) follow
+                                      on subsequent lines until the closing fence
+    """
+    cmds: list[str] = []
     lines = response.splitlines()
-    in_block = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("CMD:"):
-            cmd = stripped[4:].strip().strip("`")
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if not stripped.startswith("CMD:"):
+            i += 1
+            continue
+
+        payload = stripped[4:].strip()
+
+        # Form 1/2: inline command on the same line as CMD:.
+        if payload and not payload.startswith("```"):
+            cmd = payload.strip("`").strip()
             if cmd:
                 cmds.append(cmd)
-        elif stripped.startswith("```"):
-            in_block = not in_block
-        elif in_block and stripped and not stripped.startswith("#"):
-            cmds.append(stripped)
+            i += 1
+            continue
+
+        # Form 3: AI used a fenced code block. Skip past the opening fence
+        # (which is either on the CMD: line itself or shortly after) and
+        # collect non-empty, non-comment lines until the closing fence.
+        i += 1
+        if not payload.startswith("```"):
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                i += 1
+            i += 1  # skip the opening ``` fence
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith("```"):
+                i += 1
+                break
+            if line and not line.startswith("#"):
+                cmds.append(line)
+            i += 1
     return cmds
 
 
@@ -197,6 +414,7 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
                 bufsize=1,  # line-buffered
             )
             output_chunks: list[str] = []
+            interrupted = False
             try:
                 assert proc.stdout is not None
                 for line in proc.stdout:
@@ -209,9 +427,10 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
                 except subprocess.TimeoutExpired:
                     proc.kill()
                 print()
+                interrupted = True
             proc.wait()
             output = "".join(output_chunks)
-            if proc.returncode != 0:
+            if proc.returncode != 0 and not interrupted:
                 if RICH:
                     console.print(f"[red]Exited with code {proc.returncode}[/red]")
                 else:
@@ -221,6 +440,10 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
                 "exit_code": proc.returncode,
                 "output": output[:2000],
             })
+            # Re-raise so the agent loop bails out of the whole multi-step task
+            # instead of marching on to the next command and re-querying the AI.
+            if interrupted:
+                raise KeyboardInterrupt
         else:
             results.append({"cmd": cmd, "exit_code": None, "output": ""})
     return results
@@ -279,6 +502,10 @@ def print_help():
             "  [cyan]/switch \\<name>[/cyan]     — switch provider (claude, openai, groq, ollama)\n"
             "  [cyan]/clear[/cyan]             — clear conversation history\n"
             "  [cyan]/history[/cyan]           — show conversation history\n"
+            "  [cyan]/save \\[name][/cyan]      — save current conversation (timestamp if no name)\n"
+            "  [cyan]/load \\<name>[/cyan]      — restore a saved conversation\n"
+            "  [cyan]/sessions[/cyan]          — list saved conversations\n"
+            "  [cyan]/forget \\<name>[/cyan]    — delete a saved conversation\n"
             "  [cyan]/autorun[/cyan]           — toggle auto-execute of AI commands (no confirmation)\n"
             "  [cyan]/setup[/cyan]             — interactive: pick a provider + paste API key\n"
             "  [cyan]/keys[/cyan]              — show stored API keys\n"
@@ -299,6 +526,10 @@ def print_help():
     /switch <name>      — switch active provider (claude, openai, groq, ollama)
     /clear              — clear conversation history
     /history            — show conversation history
+    /save [name]        — save current conversation (timestamp if no name)
+    /load <name>        — restore a saved conversation
+    /sessions           — list saved conversations
+    /forget <name>      — delete a saved conversation
     /autorun            — toggle auto-execute of AI commands (no confirmation)
     /setup              — interactive: pick a provider + paste API key
     /keys               — show stored API keys
@@ -423,13 +654,21 @@ def main():
 
     # Set up input session
     if PROMPT_TOOLKIT:
-        session = PromptSession(history=FileHistory(HISTORY_FILE))
+        session = PromptSession(
+            history=FileHistory(HISTORY_FILE),
+            completer=_BangCompleter() if not _BARE_TTY else None,
+            complete_while_typing=False,
+        )
     else:
         try:
             readline.read_history_file(HISTORY_FILE)
         except FileNotFoundError:
             pass
         readline.set_history_length(1000)
+        # Enable tab completion: only fires when the line starts with `!`.
+        readline.set_completer(_readline_completer)
+        readline.set_completer_delims(" \t\n;")
+        readline.parse_and_bind("tab: complete")
         session = None
 
     override = os.environ.get("PROMPTOS_PROVIDER")
@@ -577,6 +816,73 @@ def main():
                 print()
                 continue
 
+            if user_input.startswith("/save"):
+                parts = user_input.split(None, 1)
+                # Default name = ISO timestamp like 2026-04-26_17-30-00
+                default_name = time.strftime("%Y-%m-%d_%H-%M-%S")
+                name = parts[1].strip() if len(parts) > 1 else default_name
+                try:
+                    path = save_session(name, history)
+                    if RICH:
+                        console.print(f"  [green]Saved[/green] {len(history)} messages → [bold]{name}[/bold]")
+                        console.print(f"  [dim]{path}[/dim]\n")
+                    else:
+                        print(f"  Saved {len(history)} messages → {name}")
+                        print(f"  {path}\n")
+                except OSError as e:
+                    print(f"  Save failed: {e}\n")
+                continue
+
+            if user_input.startswith("/load"):
+                parts = user_input.split(None, 1)
+                if len(parts) < 2:
+                    print("  Usage: /load <name>   (use /sessions to list)\n")
+                    continue
+                name = parts[1].strip()
+                try:
+                    history = load_session(name)
+                    msg = f"  Loaded session [bold]{name}[/bold] ({len(history)} messages)"
+                    if RICH:
+                        console.print(f"  [green]{msg}[/green]\n")
+                    else:
+                        print(f"  Loaded session {name} ({len(history)} messages)\n")
+                except FileNotFoundError:
+                    print(f"  No saved session named '{name}'. Try /sessions to list.\n")
+                except (OSError, _json.JSONDecodeError) as e:
+                    print(f"  Load failed: {e}\n")
+                continue
+
+            if user_input == "/sessions":
+                sessions = list_sessions()
+                if not sessions:
+                    print("  No saved sessions yet. Use /save [name] to save the current one.\n")
+                    continue
+                if RICH:
+                    console.print("  [bold]Saved sessions[/bold]")
+                    for n, count, mtime in sessions:
+                        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
+                        console.print(f"  • [cyan]{n}[/cyan]  [dim]({count} messages, {when})[/dim]")
+                    console.print()
+                else:
+                    print("  Saved sessions:")
+                    for n, count, mtime in sessions:
+                        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
+                        print(f"  - {n}  ({count} messages, {when})")
+                    print()
+                continue
+
+            if user_input.startswith("/forget"):
+                parts = user_input.split(None, 1)
+                if len(parts) < 2:
+                    print("  Usage: /forget <name>   (deletes a saved session)\n")
+                    continue
+                name = parts[1].strip()
+                if forget_session(name):
+                    print(f"  Forgot session '{name}'.\n")
+                else:
+                    print(f"  No saved session named '{name}'.\n")
+                continue
+
             if user_input in ("/autorun", "/autorun on", "/autorun off"):
                 if user_input == "/autorun on" or (user_input == "/autorun" and not autorun):
                     autorun = True
@@ -659,19 +965,31 @@ def main():
             try:
                 while True:
                     # Stream response, collect chunks
+                    response_chunks = []
                     if RICH:
                         color = PROVIDER_COLORS.get(active_provider.name, "bold white")
-                        console.print(f"\n[{color}][{active_provider.name}][/{color}] ", end="")
+                        console.print(f"\n[{color}][{active_provider.name}][/{color}]")
+                        # Live re-renders the accumulating markdown as chunks arrive,
+                        # so the user sees rich formatting (bold, code blocks, lists)
+                        # instead of raw markdown text.
+                        with Live(
+                            Markdown(""),
+                            console=console,
+                            refresh_per_second=8,
+                            vertical_overflow="visible",
+                        ) as live:
+                            for chunk in active_provider.chat(history, stream=True):
+                                response_chunks.append(chunk)
+                                live.update(Markdown("".join(response_chunks)))
+                        response = "".join(response_chunks)
+                        console.print()
                     else:
                         print(f"\n\033[90m[{active_provider.name}]\033[0m ", end="", flush=True)
-
-                    response_chunks = []
-                    for chunk in active_provider.chat(history, stream=True):
-                        print(chunk, end="", flush=True)
-                        response_chunks.append(chunk)
-
-                    response = "".join(response_chunks)
-                    print("\n")
+                        for chunk in active_provider.chat(history, stream=True):
+                            print(chunk, end="", flush=True)
+                            response_chunks.append(chunk)
+                        response = "".join(response_chunks)
+                        print("\n")
 
                     history.append(Message("assistant", response))
 

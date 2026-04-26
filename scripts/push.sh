@@ -55,11 +55,17 @@ FILES=(
     usr/local/bin/promptos-model
     usr/local/bin/promptos-warmup
     usr/local/bin/promptos-install
+    usr/local/bin/promptos-web
     usr/local/lib/promptos/
     etc/profile.d/promptsh.sh
     etc/bash.bashrc
     etc/ssh/sshd_config.d/promptos.conf
     etc/vconsole.conf
+    etc/dconf/profile/
+    etc/dconf/db/local.d/
+    etc/dconf/db/gdm.d/
+    usr/share/backgrounds/promptos/
+    usr/share/promptos/
 )
 
 # Drop entries that don't exist locally (e.g. if you removed a script).
@@ -104,6 +110,15 @@ chmod 755 /etc/profile.d/promptsh.sh 2>/dev/null || true
 python -m compileall -q /usr/local/lib/promptos/ 2>/dev/null || true
 # Reload sshd if its drop-in changed (idempotent — fine to run regardless).
 systemctl reload sshd 2>/dev/null || true
+# Recompile dconf system db so wallpaper / login-screen changes apply,
+# then bounce gdm if it's installed so the login screen picks them up.
+if command -v dconf >/dev/null 2>&1; then
+    dconf update 2>/dev/null || true
+fi
+if systemctl is-enabled gdm.service >/dev/null 2>&1; then
+    # Use try-restart so we don't kick a logged-in user unless gdm is already running.
+    systemctl try-restart gdm.service 2>/dev/null || true
+fi
 REMOTE
 
 echo "==> Done."

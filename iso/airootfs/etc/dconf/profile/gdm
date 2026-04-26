@@ -1,0 +1,10 @@
+# dconf profile used by the GDM greeter (login screen).
+# Arch's gdm package doesn't ship this by default, so without it our
+# /etc/dconf/db/gdm.d/* overrides (login-screen logo, etc.) never load.
+#
+# The file-db line points to the greeter defaults shipped by gdm —
+# without it, the greeter starts a full gnome-session instead of the
+# lightweight greeter UI.
+user-db:user
+system-db:gdm
+file-db:/usr/share/gdm/greeter-dconf-defaults

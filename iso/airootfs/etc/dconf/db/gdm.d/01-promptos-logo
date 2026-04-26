@@ -1,0 +1,10 @@
+# Settings for the GDM greeter (login screen).
+# This file is part of the `gdm` dconf profile, separate from the regular
+# user profile under /etc/dconf/db/local.d/. The greeter runs as the gdm
+# user and reads from /etc/dconf/db/gdm (compiled from this directory).
+[org/gnome/login-screen]
+# Empty logo string hides the top-of-screen logo. The wallpaper already
+# contains the promptOS logo, so a separate one would be redundant.
+logo=''
+disable-user-list=false
+banner-message-enable=false
