@@ -20,6 +20,7 @@ file_permissions=(
   ["/usr/local/bin/promptos-warmup"]="0:0:755"
   ["/usr/local/bin/promptos-install"]="0:0:755"
   ["/usr/local/bin/promptos-keys"]="0:0:755"
+  ["/usr/local/bin/promptos-wifi"]="0:0:755"
   ["/etc/promptos/keys"]="0:0:600"
   ["/etc/promptos/config"]="0:0:644"
 )

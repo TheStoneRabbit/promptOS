@@ -16,8 +16,8 @@ The traditional shell is still available as an escape hatch (`!cmd`), but it's n
 
 ## Features
 
-- **Multi-provider AI**: auto-selects the best available — Claude, OpenAI, Groq, Pollinations (keyless), or Ollama (local/offline)
-- **`dolphin3:8b` baked in**: uncensored 8B model pre-installed, no internet or API key required
+- **Multi-provider AI**: auto-selects the best available — Claude, OpenAI, Groq, or Ollama (local/offline)
+- **`qwen2.5:3b` baked in**: instruction-tuned model pre-installed, no internet or API key required
 - **Root access**: AI runs as root with full system control
 - **Auto-fallback**: if a provider fails, automatically switches to the next available one
 - **Installer**: type `install promptOS` to install to disk from a USB drive
@@ -35,7 +35,7 @@ brew install docker qemu
 
 **To run** (target hardware):
 - x86_64 machine, UEFI or BIOS
-- 8GB RAM minimum (for `dolphin3:8b`)
+- 4GB RAM minimum (for `qwen2.5:3b`); 8GB+ recommended if you swap in larger models
 - Any disk size for live use; 20GB+ recommended for install
 
 ---
@@ -46,7 +46,7 @@ brew install docker qemu
 ./scripts/build.sh
 ```
 
-Builds the ISO using Docker + archiso. The first build downloads `dolphin3:8b` (~5GB) and caches it in a Docker volume (`promptos-ollama-cache`) — subsequent builds reuse the cache and are much faster.
+Builds the ISO using Docker + archiso. The first build downloads `qwen2.5:3b` (~1.9GB) and caches it in a Docker volume (`promptos-ollama-cache`) — subsequent builds reuse the cache and are much faster.
 
 Output: `dist/promptos-YYYY.MM.DD-x86_64.iso`
 
@@ -64,7 +64,7 @@ Boots the latest ISO in QEMU with 4GB RAM and SSH forwarding on `localhost:2222`
 ssh root@localhost -p 2222
 ```
 
-> Note: Ollama takes ~3 minutes to load `dolphin3:8b` into RAM on first boot in QEMU. On real hardware with NVMe it's much faster.
+> Note: Ollama loads `qwen2.5:3b` into RAM in a few seconds on most hardware.
 
 ---
 
@@ -105,8 +105,7 @@ Auto-selected at boot in priority order:
 | `claude` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
 | `openai` | `OPENAI_API_KEY` | `gpt-4o` |
 | `groq` | `GROQ_API_KEY` (free at console.groq.com) | `llama-3.1-8b-instant` |
-| `pollinations` | Nothing | keyless cloud AI |
-| `ollama` | Nothing (baked in) | `dolphin3:8b` (offline) |
+| `ollama` | Nothing (baked in) | `qwen2.5:3b` (offline) |
 
 **Set API keys:**
 ```
@@ -155,7 +154,7 @@ promptOS/
 │       ├── usr/local/bin/promptos-warmup   # Ollama model pre-loader
 │       └── usr/local/lib/promptos/    # provider library
 │           ├── AGENT.md               # AI identity and ruleset (system prompt)
-│           └── providers/             # claude, openai, groq, pollinations, ollama
+│           └── providers/             # claude, openai, groq, ollama
 ├── scripts/
 │   ├── build.sh                       # build ISO via Docker
 │   ├── docker-build.sh                # runs inside container
@@ -169,8 +168,8 @@ promptOS/
 
 - [x] Bootable Arch ISO with auto-login
 - [x] AI shell (`promptsh`) with multi-provider support
-- [x] `dolphin3:8b` baked in (offline, uncensored)
-- [x] Groq + Pollinations providers (free/keyless cloud)
+- [x] `qwen2.5:3b` baked in (offline, instruction-tuned)
+- [x] Groq provider (free cloud)
 - [x] Auto-fallback between providers
 - [x] Disk installer (`install promptOS`)
 - [x] SSH access, network auto-configure on boot

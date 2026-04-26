@@ -5,11 +5,10 @@ Priority order (unless overridden by config):
   1. claude        — if ANTHROPIC_API_KEY is set
   2. openai        — if OPENAI_API_KEY is set
   3. groq          — if GROQ_API_KEY is set (free tier at console.groq.com)
-  4. pollinations  — free, keyless, works out of the box (requires internet)
-  5. ollama        — local LLM, works offline
-  6. (none)        — bash passthrough
+  4. ollama        — local LLM, works offline
+  5. (none)        — bash passthrough
 
-Override with: PROMPTOS_PROVIDER=ollama|claude|openai|groq|pollinations
+Override with: PROMPTOS_PROVIDER=ollama|claude|openai|groq
 """
 
 import os
@@ -18,14 +17,12 @@ from .ollama import OllamaProvider
 from .claude import ClaudeProvider
 from .openai import OpenAIProvider
 from .groq import GroqProvider
-from .pollinations import PollinationsProvider
 
 _REGISTRY: dict[str, type[Provider]] = {
     "ollama": OllamaProvider,
     "claude": ClaudeProvider,
     "openai": OpenAIProvider,
     "groq": GroqProvider,
-    "pollinations": PollinationsProvider,
 }
 
 
@@ -35,8 +32,7 @@ def all_providers() -> list[Provider]:
         ClaudeProvider(),
         OpenAIProvider(model=os.environ.get("PROMPTOS_OPENAI_MODEL", "gpt-4o")),
         GroqProvider(),
-        PollinationsProvider(),
-        OllamaProvider(model=os.environ.get("PROMPTOS_OLLAMA_MODEL", "llama3.2:1b")),
+        OllamaProvider(model=os.environ.get("PROMPTOS_OLLAMA_MODEL", "qwen2.5:3b")),
     ]
 
 
@@ -50,7 +46,7 @@ def get_provider(name: str | None = None) -> Provider | None:
         if not cls:
             raise ValueError(f"Unknown provider '{name}'. Choose from: {list(_REGISTRY)}")
         if name == "ollama":
-            p = OllamaProvider(model=os.environ.get("PROMPTOS_OLLAMA_MODEL", "llama3.2:1b"))
+            p = OllamaProvider(model=os.environ.get("PROMPTOS_OLLAMA_MODEL", "qwen2.5:3b"))
         else:
             p = cls()
         return p if p.available() else None

@@ -4,34 +4,46 @@ promptos-keys — manage API keys for promptOS providers.
 Keys are stored in /etc/promptos/keys (root-only, mode 600).
 
 Usage:
-  promptos-keys set claude <key>
-  promptos-keys set openai <key>
+  promptos-keys setup              interactive — pick provider, enter key, set as default
+  promptos-keys set <provider> <key>
   promptos-keys show
-  promptos-keys clear claude
+  promptos-keys clear <provider>
+
+Providers: claude | openai | groq
 """
 
 import os
 import sys
 import stat
+import getpass
 
 KEYS_FILE = "/etc/promptos/keys"
+CONFIG_FILE = "/etc/promptos/config"
+
 PROVIDER_MAP = {
     "claude": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "groq":   "GROQ_API_KEY",
+}
+
+PROVIDER_INFO = {
+    "claude": ("Anthropic Claude",  "https://console.anthropic.com",  "sk-ant-..."),
+    "openai": ("OpenAI",             "https://platform.openai.com",    "sk-..."),
+    "groq":   ("Groq (free tier)",   "https://console.groq.com",       "gsk_..."),
 }
 
 
-def load_keys() -> dict[str, str]:
-    keys = {}
-    if not os.path.exists(KEYS_FILE):
-        return keys
-    with open(KEYS_FILE) as f:
+def load_kv(path: str) -> dict[str, str]:
+    out = {}
+    if not os.path.exists(path):
+        return out
+    with open(path) as f:
         for line in f:
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, _, v = line.partition("=")
-                keys[k.strip()] = v.strip()
-    return keys
+                out[k.strip()] = v.strip()
+    return out
 
 
 def save_keys(keys: dict[str, str]):
@@ -43,26 +55,59 @@ def save_keys(keys: dict[str, str]):
     os.chmod(KEYS_FILE, stat.S_IRUSR | stat.S_IWUSR)  # 600
 
 
+def set_config_value(key: str, value: str):
+    """Update one key=value line in /etc/promptos/config (preserving comments and other lines)."""
+    if not os.path.exists(CONFIG_FILE):
+        os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+        with open(CONFIG_FILE, "w") as f:
+            f.write(f"{key}={value}\n")
+        return
+
+    with open(CONFIG_FILE) as f:
+        lines = f.readlines()
+
+    found = False
+    out_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            k = stripped.split("=", 1)[0].strip()
+            if k == key:
+                out_lines.append(f"{key}={value}\n")
+                found = True
+                continue
+        out_lines.append(line)
+
+    if not found:
+        if out_lines and not out_lines[-1].endswith("\n"):
+            out_lines.append("\n")
+        out_lines.append(f"{key}={value}\n")
+
+    with open(CONFIG_FILE, "w") as f:
+        f.writelines(out_lines)
+
+
 def cmd_set(provider: str, key: str):
     env_var = PROVIDER_MAP.get(provider)
     if not env_var:
         print(f"Unknown provider '{provider}'. Choose from: {list(PROVIDER_MAP)}")
         sys.exit(1)
-    keys = load_keys()
+    keys = load_kv(KEYS_FILE)
     keys[env_var] = key
     save_keys(keys)
     print(f"[ok] {provider} key saved to {KEYS_FILE}")
 
 
 def cmd_show():
-    keys = load_keys()
-    if not keys:
-        print("No keys stored.")
-        return
+    keys = load_kv(KEYS_FILE)
+    config = load_kv(CONFIG_FILE)
+    active = config.get("PROMPTOS_PROVIDER", "auto")
+    print(f"  active provider: {active}\n")
     for provider, env_var in PROVIDER_MAP.items():
         val = keys.get(env_var, "")
         masked = (val[:6] + "..." + val[-4:]) if len(val) > 12 else ("(set)" if val else "(not set)")
-        print(f"  {provider:10} {env_var:25} {masked}")
+        marker = " *" if provider == active else "  "
+        print(f"  {marker} {provider:10} {env_var:25} {masked}")
 
 
 def cmd_clear(provider: str):
@@ -70,13 +115,73 @@ def cmd_clear(provider: str):
     if not env_var:
         print(f"Unknown provider '{provider}'.")
         sys.exit(1)
-    keys = load_keys()
+    keys = load_kv(KEYS_FILE)
     if env_var in keys:
         del keys[env_var]
         save_keys(keys)
         print(f"[ok] {provider} key removed.")
     else:
         print(f"{provider} key was not set.")
+
+
+def cmd_setup():
+    """Interactive provider setup."""
+    print()
+    print("Set up an AI provider:")
+    print()
+    providers = list(PROVIDER_MAP.keys())
+    for i, p in enumerate(providers, 1):
+        label, url, _ = PROVIDER_INFO[p]
+        print(f"  {i}. {p:8} — {label} ({url})")
+    print()
+
+    while True:
+        try:
+            choice = input("Choose a provider [1-{}], or name (claude/openai/groq), blank to cancel: ".format(len(providers))).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if not choice:
+            print("Cancelled.")
+            return
+        provider = None
+        if choice.isdigit() and 1 <= int(choice) <= len(providers):
+            provider = providers[int(choice) - 1]
+        elif choice in PROVIDER_MAP:
+            provider = choice
+        if provider:
+            break
+        print("Invalid choice, try again.")
+
+    _, url, example = PROVIDER_INFO[provider]
+    print()
+    print(f"Get a key at: {url}")
+    print(f"Format looks like: {example}")
+    print()
+    try:
+        key = getpass.getpass(f"Paste your {provider} API key (input hidden): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+    if not key:
+        print("No key entered. Cancelled.")
+        return
+
+    keys = load_kv(KEYS_FILE)
+    keys[PROVIDER_MAP[provider]] = key
+    save_keys(keys)
+    print(f"[ok] {provider} key saved to {KEYS_FILE}")
+
+    try:
+        ans = input(f"Make {provider} the default provider? [Y/n]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+    if ans in ("", "y", "yes"):
+        set_config_value("PROMPTOS_PROVIDER", provider)
+        print(f"[ok] PROMPTOS_PROVIDER={provider} written to {CONFIG_FILE}")
+        print("    Restart promptsh (type 'exit' and log back in) to pick it up,")
+        print(f"    or use /switch {provider} inside the current session.")
 
 
 def main():
@@ -86,7 +191,9 @@ def main():
         sys.exit(0)
 
     cmd = args[0]
-    if cmd == "set" and len(args) == 3:
+    if cmd == "setup":
+        cmd_setup()
+    elif cmd == "set" and len(args) == 3:
         cmd_set(args[1], args[2])
     elif cmd == "show":
         cmd_show()

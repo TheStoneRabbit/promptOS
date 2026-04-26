@@ -2,12 +2,12 @@
 # Lines starting with # are comments.
 # Values here are overridden by environment variables of the same name.
 
-# Default AI provider: auto | claude | openai | groq | pollinations | ollama
-# "auto" picks the best available: claude > openai > groq > pollinations > ollama
+# Default AI provider: auto | claude | openai | groq | ollama
+# "auto" picks the best available: claude > openai > groq > ollama
 PROMPTOS_PROVIDER=ollama
 
 # Ollama model to use when provider=ollama
-PROMPTOS_OLLAMA_MODEL=dolphin3:8b
+PROMPTOS_OLLAMA_MODEL=qwen2.5:3b
 
 # Ollama server URL — change to http://10.0.2.2:11434 to use Ollama running on the host Mac
 PROMPTOS_OLLAMA_BASE_URL=http://localhost:11434

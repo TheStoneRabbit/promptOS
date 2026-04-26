@@ -12,6 +12,7 @@ import subprocess
 import json
 import shutil
 import time
+import getpass
 
 sys.path.insert(0, "/usr/local/lib/promptos")
 
@@ -57,19 +58,63 @@ def confirm(prompt: str, default: bool = True) -> bool:
     return ans in ("y", "yes")
 
 
-def run(cmd: str, check: bool = True) -> int:
+def prompt_password(label: str = "Root password") -> str:
+    """Prompt for a password twice and require they match. Loops until valid."""
+    while True:
+        try:
+            p1 = getpass.getpass(f"{label}: ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            raise SystemExit(1)
+        if not p1:
+            print("Password cannot be empty.")
+            continue
+        if len(p1) < 4:
+            print("Password too short (minimum 4 characters).")
+            continue
+        try:
+            p2 = getpass.getpass(f"{label} (confirm): ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            raise SystemExit(1)
+        if p1 != p2:
+            print("Passwords do not match. Try again.")
+            continue
+        return p1
+
+
+def run(cmd: str, check: bool = True, ok_codes: tuple[int, ...] = (0,)) -> int:
     if RICH:
         console.print(f"[dim]$ {cmd}[/dim]")
     else:
         print(f"$ {cmd}")
     result = subprocess.run(cmd, shell=True)
-    if check and result.returncode != 0:
+    if check and result.returncode not in ok_codes:
         if RICH:
             console.print(f"[red]Command failed (exit {result.returncode})[/red]")
         else:
             print(f"Error: command failed (exit {result.returncode})")
         raise SystemExit(1)
     return result.returncode
+
+
+def is_online() -> bool:
+    """Quick connectivity check using NetworkManager if available, then a direct probe."""
+    try:
+        if subprocess.run(
+            ["nm-online", "-q", "--timeout=2"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode == 0:
+            return True
+    except FileNotFoundError:
+        pass
+    try:
+        return subprocess.run(
+            ["curl", "-sf", "--max-time", "3", "http://detectportal.firefox.com/success.txt"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode == 0
+    except FileNotFoundError:
+        return False
 
 
 def get_disks() -> list[dict]:
@@ -126,6 +171,12 @@ def mount_partitions(efi: str, root: str):
 
 def install_base():
     """Copy the live filesystem to the target instead of downloading packages."""
+    # Stop ollama before rsync — otherwise model files in /var/lib/ollama/models/blobs
+    # can be mid-mmap and copy as truncated, causing 500 errors on the installed system.
+    run("systemctl stop ollama ollama-warmup", check=False)
+    # Wait briefly for the daemon to release file handles.
+    time.sleep(1)
+
     # rsync the live root to the mountpoint, excluding virtual/temp filesystems
     excludes = [
         "/dev/*", "/proc/*", "/sys/*", "/tmp/*", "/run/*",
@@ -136,7 +187,23 @@ def install_base():
     # not the kernel installed by pacstrap. We reinstall the kernel in the chroot instead.
     excludes.append("/boot/*")
     exclude_args = " ".join(f'--exclude="{e}"' for e in excludes)
-    run(f"rsync -aAX --info=progress2 --no-inc-recursive {exclude_args} / {MOUNTPOINT}/")
+    # rsync exit 24 = "some source files vanished" (e.g. log rotation during copy) — benign.
+    # exit 23 = "some files not transferred" (often perms on /run sockets) — also non-fatal here.
+    run(
+        f"rsync -aAX --info=progress2 --no-inc-recursive {exclude_args} / {MOUNTPOINT}/",
+        ok_codes=(0, 23, 24),
+    )
+
+    # Verify wifi connections were carried over (NetworkManager will auto-connect on boot).
+    nm_dir = f"{MOUNTPOINT}/etc/NetworkManager/system-connections"
+    if os.path.isdir(nm_dir):
+        wifi_count = sum(1 for f in os.listdir(nm_dir) if f.endswith(".nmconnection"))
+        if wifi_count:
+            msg = f"  {wifi_count} saved network(s) carried over to the installed system."
+            if RICH:
+                console.print(f"[green]{msg}[/green]")
+            else:
+                print(msg)
 
     # Ensure excluded dirs exist as empty mountpoints
     for d in ["dev", "proc", "sys", "tmp", "run", "mnt", "media"]:
@@ -158,44 +225,52 @@ def install_base():
     run(f"arch-chroot {MOUNTPOINT} pacman-key --populate archlinux")
 
     # /boot on the live ISO is overlaid by the ISO boot partition, so rsync misses the kernel.
-    # Try multiple locations to find the kernel and place it at /boot/vmlinuz-linux.
+    # Stage /boot/vmlinuz-linux on the target before mkinitcpio runs in setup_system(),
+    # otherwise mkinitcpio errors with "'/boot/vmlinuz-linux' must be readable".
     import glob
     kernel_dst = f"{MOUNTPOINT}/boot/vmlinuz-linux"
-    kernel_found = False
 
-    # 1. Check if rsync'd modules dir has the kernel (modern Arch stores it here)
-    candidates = glob.glob(f"{MOUNTPOINT}/usr/lib/modules/*/vmlinuz")
-    if candidates:
-        run(f"cp {candidates[0]} {kernel_dst}")
-        kernel_found = True
-        print(f"  Kernel copied from {candidates[0]}")
+    # Priority: archiso bootmnt is the actual booted kernel and is always present
+    # on a live system, so check it first.
+    search_paths = [
+        "/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux",
+        "/run/archiso/airootfs/boot/vmlinuz-linux",
+        "/boot/vmlinuz-linux",
+        "/boot/vmlinuz",
+    ]
+    # Plus any kernel that landed in the rsync'd modules dir (modern Arch location)
+    search_paths.extend(sorted(glob.glob(f"{MOUNTPOINT}/usr/lib/modules/*/vmlinuz")))
 
-    # 2. Try the underlying squashfs airootfs
-    if not kernel_found:
-        airootfs_kernel = "/run/archiso/airootfs/boot/vmlinuz-linux"
-        if os.path.exists(airootfs_kernel):
-            run(f"cp {airootfs_kernel} {kernel_dst}")
-            kernel_found = True
-            print(f"  Kernel copied from {airootfs_kernel}")
-
-    # 3. Try the live /boot (ISO boot area — same kernel, different mount)
-    if not kernel_found:
-        for p in ["/boot/vmlinuz-linux", "/boot/vmlinuz"]:
-            if os.path.isfile(p):
-                run(f"cp {p} {kernel_dst}")
-                kernel_found = True
-                print(f"  Kernel copied from {p}")
-                break
-
-    if not kernel_found:
-        print("  WARNING: Could not find kernel! Listing search paths:")
-        run(f"ls -la {MOUNTPOINT}/usr/lib/modules/", check=False)
-        run("ls -la /run/archiso/airootfs/boot/ 2>/dev/null || echo '  /run/archiso/airootfs/boot not found'", check=False)
-        run("ls -la /boot/", check=False)
-        print("  Install may not boot. Connect to network and run: pacman -S linux")
+    kernel_src = next((p for p in search_paths if os.path.isfile(p)), None)
+    if kernel_src:
+        run(f"cp {kernel_src} {kernel_dst}")
+        print(f"  Kernel copied from {kernel_src}")
+    else:
+        print("  ERROR: Could not find a kernel image. Searched:")
+        for p in search_paths:
+            print(f"    {p}")
+        run(f"ls -la {MOUNTPOINT}/usr/lib/modules/ 2>/dev/null", check=False)
+        run("ls -la /run/archiso/bootmnt/arch/boot/x86_64/ 2>/dev/null", check=False)
+        raise SystemExit(1)
 
 
-def setup_system(hostname: str, timezone: str, locale: str):
+def set_root_password(password: str):
+    """Set the root password inside the chroot. Uses stdin to avoid shell-quoting the password."""
+    proc = subprocess.run(
+        ["arch-chroot", MOUNTPOINT, "chpasswd"],
+        input=f"root:{password}\n",
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        if RICH:
+            console.print(f"[red]chpasswd failed: {proc.stderr.strip()}[/red]")
+        else:
+            print(f"chpasswd failed: {proc.stderr.strip()}")
+        raise SystemExit(1)
+
+
+def setup_system(hostname: str, timezone: str, locale: str, root_password: str):
     # fstab
     run(f"genfstab -U {MOUNTPOINT} >> {MOUNTPOINT}/etc/fstab")
 
@@ -236,8 +311,22 @@ def setup_system(hostname: str, timezone: str, locale: str):
         )
     run(f"arch-chroot {MOUNTPOINT} mkinitcpio -P", check=False)
 
+    # Verify the initramfs actually got built — without it, the installed system won't boot.
+    initramfs = f"{MOUNTPOINT}/boot/initramfs-linux.img"
+    if not os.path.isfile(initramfs):
+        if RICH:
+            console.print(f"[red]ERROR: mkinitcpio did not produce {initramfs}.[/red]")
+        else:
+            print(f"ERROR: mkinitcpio did not produce {initramfs}.")
+        run(f"ls -la {MOUNTPOINT}/boot/", check=False)
+        run(f"ls -la {MOUNTPOINT}/etc/mkinitcpio.d/", check=False)
+        raise SystemExit(1)
+
     # Set promptsh as root's login shell
     run(f"arch-chroot {MOUNTPOINT} chsh -s /usr/local/bin/promptsh root", check=False)
+
+    # Set root password (overrides the live ISO's empty-password shadow entry)
+    set_root_password(root_password)
 
 
 def install_bootloader():
@@ -372,11 +461,31 @@ def main():
         print("Installation cancelled.")
         sys.exit(0)
 
+    # ── WiFi (optional, before partitioning so it persists into install) ─────
+    if not is_online():
+        print_step(
+            "Network",
+            "No network detected. WiFi connections set up now will be saved\n"
+            "to the installed system, so you'll be online after first boot."
+        )
+        if confirm("Set up WiFi now?", default=True):
+            run("/usr/local/bin/promptos-wifi", check=False)
+    else:
+        print_step("Network", "Already online — wifi/ethernet settings will carry over to the installed system.")
+
     # ── Config ────────────────────────────────────────────────────────────────
     print_step("System Configuration")
     hostname = ask("Hostname", "promptos")
     timezone = ask("Timezone (e.g. America/New_York)", "UTC")
     locale   = ask("Locale", "en_US.UTF-8")
+
+    # ── Root password ─────────────────────────────────────────────────────────
+    print_step(
+        "Root Password",
+        "Set a password for the root account. You'll use this for SSH\n"
+        "and any sudo-equivalent operations on the installed system."
+    )
+    root_password = prompt_password()
 
     # ── Install ───────────────────────────────────────────────────────────────
     print_step(
@@ -395,7 +504,7 @@ def main():
     install_base()
 
     print_step("Configuring System")
-    setup_system(hostname, timezone, locale)
+    setup_system(hostname, timezone, locale, root_password)
 
     print_step("Installing Bootloader")
     install_bootloader()

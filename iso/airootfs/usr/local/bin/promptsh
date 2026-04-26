@@ -8,8 +8,6 @@ Type /help for commands.
 import os
 import sys
 import subprocess
-import threading
-import time
 
 # Add promptOS library to path
 sys.path.insert(0, "/usr/local/lib/promptos")
@@ -54,27 +52,8 @@ PROVIDER_COLORS = {
     "claude":       "bold magenta",
     "openai":       "bold green",
     "groq":         "bold cyan",
-    "pollinations": "bold blue",
     "ollama":       "bold yellow",
 }
-
-
-def _start_spinner(message: str = "Initializing promptOS"):
-    stop = threading.Event()
-    frames = ["-", "\\", "|", "/"] if _BARE_TTY else ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-    def _spin():
-        i = 0
-        while not stop.is_set():
-            print(f"\r{frames[i % len(frames)]}  {message}...", end="", flush=True)
-            i += 1
-            time.sleep(0.1)
-        # Clear the spinner line
-        print("\r" + " " * (len(message) + 8) + "\r", end="", flush=True)
-
-    t = threading.Thread(target=_spin, daemon=True)
-    t.start()
-    return stop
 
 
 def _load_agent_md() -> str:
@@ -217,11 +196,13 @@ def print_help():
         console.print(Panel(
             "[bold]promptsh commands[/bold]\n\n"
             "  [cyan]/providers[/cyan]         — list all providers and status\n"
-            "  [cyan]/switch \\<name>[/cyan]     — switch provider (claude, openai, groq, pollinations, ollama)\n"
+            "  [cyan]/switch \\<name>[/cyan]     — switch provider (claude, openai, groq, ollama)\n"
             "  [cyan]/clear[/cyan]             — clear conversation history\n"
             "  [cyan]/history[/cyan]           — show conversation history\n"
             "  [cyan]/autorun[/cyan]           — toggle auto-execute of AI commands (no confirmation)\n"
-            "  [cyan]/keys[/cyan]              — manage API keys\n"
+            "  [cyan]/setup[/cyan]             — interactive: pick a provider + paste API key\n"
+            "  [cyan]/keys[/cyan]              — show stored API keys\n"
+            "  [cyan]/wifi[/cyan]              — connect to a WiFi network\n"
             "  [cyan]!\\<cmd>[/cyan]             — run bash command directly\n"
             "  [cyan]!!\\<prompt>[/cyan]          — send to AI and auto-run any commands it suggests\n"
             "  [cyan]exit / quit[/cyan]        — exit promptsh",
@@ -236,8 +217,12 @@ def print_help():
     /switch <name>      — switch active provider (claude, openai, groq, ollama)
     /clear              — clear conversation history
     /history            — show conversation history
-    /keys               — manage API keys
+    /autorun            — toggle auto-execute of AI commands (no confirmation)
+    /setup              — interactive: pick a provider + paste API key
+    /keys               — show stored API keys
+    /wifi               — connect to a WiFi network
     !<cmd>              — run a bash command directly, bypassing AI
+    !!<prompt>          — send to AI and auto-run any commands it suggests
     exit / quit         — exit promptsh
 """)
 
@@ -263,8 +248,6 @@ def render_response(text: str, provider_name: str):
 
 
 def main():
-    spinner = _start_spinner("Initializing promptOS")
-
     load_config()
 
     # Set up input session
@@ -280,8 +263,6 @@ def main():
 
     override = os.environ.get("PROMPTOS_PROVIDER")
     provider = get_provider(None if override == "auto" else override)
-
-    spinner.set()  # stop spinner before printing banner
 
     print_banner(provider.name if provider else None)
 
@@ -323,12 +304,20 @@ def main():
                 _autorun_this = autorun
 
             if user_input.startswith("!"):
-                subprocess.run(user_input[1:], shell=True)
+                try:
+                    subprocess.run(user_input[1:], shell=True)
+                except KeyboardInterrupt:
+                    print()
                 continue
 
             # Intercept install trigger before AI sees it
             if user_input.lower().strip() in ("install promptos", "install prompts"):
-                subprocess.run(["promptos-install"])
+                try:
+                    subprocess.run(["promptos-install"])
+                except KeyboardInterrupt:
+                    print()
+                except FileNotFoundError:
+                    print("  promptos-install not installed.\n")
                 continue
 
             if user_input == "/help":
@@ -420,8 +409,32 @@ def main():
                 continue
 
             if user_input == "/keys":
-                subprocess.run(["promptos-keys", "show"])
-                print("\nUse: promptos-keys set <claude|openai|groq> <key>")
+                try:
+                    subprocess.run(["promptos-keys", "show"])
+                    print("\nUse /setup for an interactive walkthrough,")
+                    print("or: promptos-keys set <claude|openai|groq> <key>")
+                except KeyboardInterrupt:
+                    print()
+                except FileNotFoundError:
+                    print("  promptos-keys not installed.\n")
+                continue
+
+            if user_input == "/setup":
+                try:
+                    subprocess.run(["promptos-keys", "setup"])
+                except KeyboardInterrupt:
+                    print()
+                except FileNotFoundError:
+                    print("  promptos-keys not installed.\n")
+                continue
+
+            if user_input == "/wifi":
+                try:
+                    subprocess.run(["promptos-wifi"])
+                except KeyboardInterrupt:
+                    print()
+                except FileNotFoundError:
+                    print("  promptos-wifi not installed.\n")
                 continue
 
             if not active_provider:
