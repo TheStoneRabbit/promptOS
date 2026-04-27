@@ -94,6 +94,18 @@ Strict rules:
 - Code blocks (```...```) are NEVER executed — use them only when *showing*
   the user example commands, file contents, or sample output for reference.
 
+Heredocs ARE supported for multi-line file content. Format:
+
+CMD: cat > /path/to/file <<EOF
+first line of file
+second line, can include "quotes" and $variables
+EOF
+
+The body lines and the closing `EOF` (or whatever tag you choose) are
+collected automatically and passed to bash as one command. This is the
+preferred way to write multi-line files — much safer than trying to escape
+quotes inside an `echo`.
+
 Wait for user confirmation before executing unless the action is:
 - Read-only (cat, ls, ps, df, etc.)
 - Explicitly pre-authorized by the user in this session

@@ -8,7 +8,7 @@ set -u
 
 CONFIG=/etc/promptos/config
 MODEL=$(awk -F= '/^PROMPTOS_OLLAMA_MODEL/{gsub(/[ \r\n]/,"",$2); print $2}' "$CONFIG" 2>/dev/null)
-MODEL=${MODEL:-qwen2.5:3b}
+MODEL=${MODEL:-mistral:7b-instruct}
 BASE_URL=$(awk -F= '/^PROMPTOS_OLLAMA_BASE_URL/{gsub(/[ \r\n]/,"",$2); print $2}' "$CONFIG" 2>/dev/null)
 BASE_URL=${BASE_URL:-http://127.0.0.1:11434}
 

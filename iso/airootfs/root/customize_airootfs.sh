@@ -6,42 +6,12 @@ set -euo pipefail
 echo "[promptOS] Running airootfs customization..."
 
 # ── Ollama ────────────────────────────────────────────────────────────────────
-# Binary is pre-copied from Docker volume by docker-build.sh, skip download if present
-echo "[promptOS] Checking for Ollama binary at /usr/local/bin/ollama..."
-ls -la /usr/local/bin/ollama 2>&1 || true
-if [ -f /usr/local/bin/ollama ]; then
-    chmod +x /usr/local/bin/ollama
-    echo "[promptOS] Ollama binary already present, skipping download."
-else
-    echo "[promptOS] Installing Ollama..."
-    curl -fsSL https://ollama.com/install.sh | sh
-fi
-
-# Restore our service file — the install script overwrites it
-cat > /etc/systemd/system/ollama.service << 'EOF'
-[Unit]
-Description=Ollama AI Service
-After=network.target
-
-[Service]
-Type=simple
-User=root
-Environment=OLLAMA_MODELS=/var/lib/ollama/models
-Environment=OLLAMA_HOST=127.0.0.1:11434
-Environment=OLLAMA_LOAD_TIMEOUT=10m
-ExecStart=/usr/local/bin/ollama serve
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Set up model storage path (empty — model is downloaded on first run, not baked in).
-OLLAMA_HOME=/var/lib/ollama
-OLLAMA_MODELS=$OLLAMA_HOME/models
-mkdir -p "$OLLAMA_MODELS"
-echo "[promptOS] Ollama installed; default model (qwen2.5:3b) will download on first run."
+# Installed via pacman (the `ollama` package). The Arch package ships its own
+# systemd service (runs as the `ollama` user, listens on 127.0.0.1:11434, stores
+# models under /var/lib/ollama). No custom binary install or unit file needed.
+echo "[promptOS] Enabling pacman-installed ollama service..."
+systemctl enable ollama.service 2>/dev/null || true
+echo "[promptOS] Ollama installed; default model (mistral:7b-instruct) downloads on first run."
 
 # ── Register promptsh as a valid login shell ─────────────────────────────────
 # PAM rejects logins (including SSH) whose shell isn't listed in /etc/shells.

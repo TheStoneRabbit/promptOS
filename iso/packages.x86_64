@@ -36,6 +36,9 @@ terminus-font
 ddgr
 w3m
 
+# Local LLM runtime
+ollama
+
 # Python (AI glue layer)
 python
 python-pip

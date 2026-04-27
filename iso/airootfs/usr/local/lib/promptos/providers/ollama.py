@@ -15,7 +15,7 @@ from .base import Provider, Message
 class OllamaProvider(Provider):
     name = "ollama"
 
-    def __init__(self, model: str = "qwen2.5:3b", base_url: str | None = None):
+    def __init__(self, model: str = "mistral:7b-instruct", base_url: str | None = None):
         base_url = base_url or os.environ.get("PROMPTOS_OLLAMA_BASE_URL", "http://localhost:11434")
         self.model = model
         self.base_url = base_url

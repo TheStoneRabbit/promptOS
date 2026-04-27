@@ -30,9 +30,9 @@ def all_providers() -> list[Provider]:
     """Return instantiated providers from config/env."""
     return [
         ClaudeProvider(),
-        OpenAIProvider(model=os.environ.get("PROMPTOS_OPENAI_MODEL", "gpt-4o")),
+        OpenAIProvider(model=os.environ.get("PROMPTOS_OPENAI_MODEL", "gpt-4.1")),
         GroqProvider(),
-        OllamaProvider(model=os.environ.get("PROMPTOS_OLLAMA_MODEL", "qwen2.5:3b")),
+        OllamaProvider(model=os.environ.get("PROMPTOS_OLLAMA_MODEL", "mistral:7b-instruct")),
     ]
 
 
@@ -46,7 +46,7 @@ def get_provider(name: str | None = None) -> Provider | None:
         if not cls:
             raise ValueError(f"Unknown provider '{name}'. Choose from: {list(_REGISTRY)}")
         if name == "ollama":
-            p = OllamaProvider(model=os.environ.get("PROMPTOS_OLLAMA_MODEL", "qwen2.5:3b"))
+            p = OllamaProvider(model=os.environ.get("PROMPTOS_OLLAMA_MODEL", "mistral:7b-instruct"))
         else:
             p = cls()
         return p if p.available() else None
