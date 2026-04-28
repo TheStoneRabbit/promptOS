@@ -294,6 +294,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application):
         super().__init__(application=app)
         self.set_title("promptOS")
+        self.set_icon_name("org.promptos.ControlCenter")
         self.set_default_size(1320, 860)
 
         self.history: list[Message] = []

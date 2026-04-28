@@ -492,6 +492,11 @@ def install_promptos():
         ("/usr/local/bin/promptos-install", f"{MOUNTPOINT}/usr/local/bin/promptos-install"),
         ("/usr/local/lib/promptos",        f"{MOUNTPOINT}/usr/local/lib/promptos"),
         ("/etc/promptos",                  f"{MOUNTPOINT}/etc/promptos"),
+        ("/usr/share/applications/org.promptos.ControlCenter.desktop",
+         f"{MOUNTPOINT}/usr/share/applications/org.promptos.ControlCenter.desktop"),
+        ("/usr/share/icons/hicolor",       f"{MOUNTPOINT}/usr/share/icons/hicolor"),
+        ("/usr/share/pixmaps",             f"{MOUNTPOINT}/usr/share/pixmaps"),
+        ("/usr/share/promptos",            f"{MOUNTPOINT}/usr/share/promptos"),
     ]
     for src, dst in copies:
         if os.path.exists(src):
@@ -535,6 +540,10 @@ def install_promptos():
 
     # Enable ollama services
     run(f"arch-chroot {MOUNTPOINT} systemctl enable ollama ollama-warmup", check=False)
+
+    # Refresh desktop + icon caches so dock/app grid picks up promptOS GUI.
+    run(f"arch-chroot {MOUNTPOINT} gtk-update-icon-cache -f /usr/share/icons/hicolor", check=False)
+    run(f"arch-chroot {MOUNTPOINT} update-desktop-database /usr/share/applications", check=False)
 
     # Copy warmup script
     if os.path.exists("/usr/local/bin/promptos-warmup"):

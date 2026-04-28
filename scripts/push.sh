@@ -67,6 +67,7 @@ FILES=(
     etc/dconf/db/gdm.d/
     usr/share/applications/org.promptos.ControlCenter.desktop
     usr/share/icons/hicolor/
+    usr/share/pixmaps/
     usr/share/backgrounds/promptos/
     usr/share/promptos/
 )
