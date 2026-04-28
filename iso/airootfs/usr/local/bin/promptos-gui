@@ -250,6 +250,11 @@ class PromptOSWindow(Adw.ApplicationWindow):
         new_btn.connect("clicked", lambda *_: self._new_chat())
         topbar.append(new_btn)
 
+        close_btn = Gtk.Button(label="X")
+        close_btn.set_tooltip_text("Close promptOS")
+        close_btn.connect("clicked", lambda *_: self.close())
+        topbar.append(close_btn)
+
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         page.append(root)
 
