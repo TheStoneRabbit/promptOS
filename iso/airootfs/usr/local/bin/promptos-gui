@@ -327,6 +327,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.suggest_request_seq = 0
         self.current_cwd = os.getcwd()
         self.session_search_text = ""
+        self.follow_output = True
+        self._programmatic_scroll = False
 
         self._load_env_config()
         self._install_css()
@@ -470,6 +472,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.chat_scroll.set_vexpand(True)
         self.chat_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.chat_scroll.set_child(self.chat_list)
+        self.chat_scroll.get_vadjustment().connect("value-changed", self._on_chat_scroll_changed)
         main.append(self.chat_scroll)
 
         cmd_frame = Gtk.Frame()
@@ -583,7 +586,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
     def _add_bubble(self, role: str, text: str) -> ChatBubble:
         bubble = ChatBubble(role, text)
         self.chat_list.append(bubble)
-        GLib.idle_add(self._scroll_to_bottom)
+        if self.follow_output:
+            GLib.idle_add(self._scroll_to_bottom)
         return bubble
 
     def _add_user_message(self, text: str):
@@ -594,8 +598,24 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
     def _scroll_to_bottom(self):
         adj = self.chat_scroll.get_vadjustment()
+        self._programmatic_scroll = True
         adj.set_value(max(0.0, adj.get_upper() - adj.get_page_size()))
+        GLib.idle_add(self._clear_programmatic_scroll_flag)
         return False
+
+    def _clear_programmatic_scroll_flag(self):
+        self._programmatic_scroll = False
+        return False
+
+    def _on_chat_scroll_changed(self, adj: Gtk.Adjustment):
+        if self._programmatic_scroll:
+            return
+        self.follow_output = self._is_near_bottom(adj)
+
+    def _is_near_bottom(self, adj: Gtk.Adjustment) -> bool:
+        # Keep following while user is at/near bottom (pixel tolerance).
+        bottom = adj.get_upper() - adj.get_page_size()
+        return (bottom - adj.get_value()) <= 36.0
 
     def _set_input_enabled(self, enabled: bool):
         self.entry.set_sensitive(enabled)
@@ -608,6 +628,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         if not text:
             return
         self.entry.set_text("")
+        self.follow_output = True
 
         if text.startswith("/"):
             self._handle_slash_command(text)
