@@ -16,6 +16,7 @@ import re
 import socket
 import subprocess
 import threading
+import json
 from pathlib import Path
 
 try:
@@ -100,7 +101,7 @@ class ChatBubble(Gtk.Box):
             return
         label = Gtk.Label(xalign=0)
         label.set_wrap(True)
-        label.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        label.set_wrap_mode(Gtk.WrapMode.CHAR)
         label.set_selectable(True)
         label.set_max_width_chars(95)
         label.set_text(text)
@@ -120,7 +121,7 @@ class ChatBubble(Gtk.Box):
         tv.set_editable(False)
         tv.set_cursor_visible(False)
         tv.set_monospace(True)
-        tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        tv.set_wrap_mode(Gtk.WrapMode.CHAR)
         tv.get_buffer().set_text(code.rstrip("\n"))
         box.append(tv)
 
@@ -272,6 +273,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
         host_label.add_css_class("monospace")
         cwd_label = Gtk.Label(label=f"CWD: {os.getcwd()}", xalign=0)
         cwd_label.add_css_class("monospace")
+        cwd_label.set_wrap(True)
+        cwd_label.set_wrap_mode(Gtk.WrapMode.CHAR)
+        cwd_label.set_max_width_chars(34)
         sidebar.append(host_label)
         sidebar.append(cwd_label)
 
@@ -281,7 +285,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         sidebar.append(side_title)
 
         self.sessions_list = Gtk.ListBox()
-        self.sessions_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.sessions_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.sessions_list.connect("row-activated", self._on_session_row_activated)
         sessions_scroll = Gtk.ScrolledWindow()
         sessions_scroll.set_vexpand(True)
         sessions_scroll.set_child(self.sessions_list)
@@ -304,6 +309,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
         self.chat_scroll = Gtk.ScrolledWindow()
         self.chat_scroll.set_vexpand(True)
+        self.chat_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.chat_scroll.set_child(self.chat_list)
         main.append(self.chat_scroll)
 
@@ -381,6 +387,19 @@ class PromptOSWindow(Adw.ApplicationWindow):
             child = nxt
 
         self._add_assistant_message("New chat started. Ask anything about this system.")
+
+    def _clear_chat_view(self):
+        child = self.chat_list.get_first_child()
+        while child:
+            nxt = child.get_next_sibling()
+            self.chat_list.remove(child)
+            child = nxt
+
+        child = self.cmd_cards_box.get_first_child()
+        while child:
+            nxt = child.get_next_sibling()
+            self.cmd_cards_box.remove(child)
+            child = nxt
 
     def _use_quick_prompt(self, text: str):
         self.entry.set_text(text)
@@ -573,9 +592,64 @@ class PromptOSWindow(Adw.ApplicationWindow):
             return
 
         for entry in entries[:30]:
+            row = Gtk.ListBoxRow()
+            row.set_activatable(True)
+            row.set_selectable(True)
+            row.set_name(entry.stem)
             lbl = Gtk.Label(label=entry.stem, xalign=0)
             lbl.add_css_class("monospace")
-            self.sessions_list.append(lbl)
+            row.set_child(lbl)
+            self.sessions_list.append(row)
+
+    def _on_session_row_activated(self, _listbox: Gtk.ListBox, row: Gtk.ListBoxRow):
+        name = row.get_name()
+        if not name:
+            return
+        self._load_session(name)
+
+    def _load_session(self, name: str):
+        path = Path.home() / ".promptsh" / "sessions" / f"{name}.json"
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception as e:
+            self._add_assistant_message(f"Failed to load session '{name}': {e}")
+            return
+
+        loaded: list[Message] = []
+        for item in data:
+            role = item.get("role")
+            content = item.get("content", "")
+            if role not in ("system", "user", "assistant"):
+                continue
+            loaded.append(Message(role, content))
+
+        if not loaded:
+            self._add_assistant_message(f"Session '{name}' is empty.")
+            return
+
+        if loaded[0].role != "system":
+            loaded.insert(
+                0,
+                Message(
+                    "system",
+                    "You are promptOS assistant. Be concise, practical, and safe. Use CMD: only for commands that should be user-approved.",
+                ),
+            )
+
+        self.history = loaded
+        self.pending_cards.clear()
+        self.current_assistant_bubble = None
+        self._clear_chat_view()
+
+        for msg in self.history:
+            if msg.role == "system":
+                continue
+            if msg.role == "user":
+                self._add_user_message(msg.content)
+            elif msg.role == "assistant":
+                self._add_assistant_message(msg.content)
+                self._parse_cmd_cards(msg.content)
 
 
 class PromptOSApp(Adw.Application):
