@@ -923,11 +923,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
     def _refresh_provider_badge(self):
         name = self.active_provider.name if self.active_provider else "none"
-        model = getattr(self.active_provider, "model", None) if self.active_provider else None
-        if model:
-            self.provider_badge.set_text(f"Provider: {name} • {model}")
-        else:
-            self.provider_badge.set_text(f"Provider: {name}")
+        self.provider_badge.set_text(f"Provider: {name}")
 
     def _handle_llm_model_command(self, cmd: str):
         parts = cmd.split()
