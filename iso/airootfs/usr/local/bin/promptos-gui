@@ -304,6 +304,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.active_provider = None
         self.pending_cards: dict[str, CommandCard] = {}
         self.current_assistant_bubble: ChatBubble | None = None
+        self.command_queue: list[str] = []
+        self.command_running = False
         self.autorun_commands = False
         self.suggested_next_text = ""
         self.suggested_next_items: list[str] = []
@@ -740,9 +742,28 @@ class PromptOSWindow(Adw.ApplicationWindow):
         return cmd
 
     def _run_command_card(self, command: str):
+        if command not in self.pending_cards:
+            return
+        if command not in self.command_queue:
+            self.command_queue.append(command)
+        card = self.pending_cards.get(command)
+        if card:
+            card.set_state("Queued" if self.command_running else "Running...")
+        if not self.command_running:
+            self._start_next_queued_command()
+
+    def _start_next_queued_command(self):
+        if self.command_running:
+            return
+        while self.command_queue and self.command_queue[0] not in self.pending_cards:
+            self.command_queue.pop(0)
+        if not self.command_queue:
+            return
+        command = self.command_queue.pop(0)
         card = self.pending_cards.get(command)
         if card:
             card.set_state("Running...")
+        self.command_running = True
 
         handled, code, output = self._maybe_handle_cd_command(command)
         if handled:
@@ -759,10 +780,12 @@ class PromptOSWindow(Adw.ApplicationWindow):
         card = self.pending_cards.get(command)
         if not card:
             return
+        self.command_queue = [c for c in self.command_queue if c != command]
         self.cmd_cards_box.remove(card)
         del self.pending_cards[command]
 
     def _on_card_finished(self, command: str, code: int, output: str):
+        self.command_running = False
         card = self.pending_cards.get(command)
         if card:
             self.cmd_cards_box.remove(card)
@@ -772,6 +795,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             summary += f"\n\n```text\n{output}\n```"
         self._add_assistant_message(summary)
         self._request_suggested_next_async()
+        self._start_next_queued_command()
         return False
 
     def _refresh_sessions(self):
