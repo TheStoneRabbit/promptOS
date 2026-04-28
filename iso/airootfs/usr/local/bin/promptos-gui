@@ -17,6 +17,7 @@ import socket
 import subprocess
 import threading
 import json
+import shlex
 from pathlib import Path
 
 try:
@@ -305,6 +306,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.suggested_next_text = ""
         self.suggested_next_items: list[str] = []
         self.suggest_request_seq = 0
+        self.current_cwd = os.getcwd()
 
         self._load_env_config()
         self._install_css()
@@ -403,13 +405,13 @@ class PromptOSWindow(Adw.ApplicationWindow):
         host = socket.gethostname()
         host_label = Gtk.Label(label=f"Host: {host}", xalign=0)
         host_label.add_css_class("monospace")
-        cwd_label = Gtk.Label(label=f"CWD: {os.getcwd()}", xalign=0)
-        cwd_label.add_css_class("monospace")
-        cwd_label.set_wrap(True)
-        cwd_label.set_wrap_mode(Gtk.WrapMode.CHAR)
-        cwd_label.set_max_width_chars(34)
+        self.cwd_label = Gtk.Label(label=f"CWD: {self.current_cwd}", xalign=0)
+        self.cwd_label.add_css_class("monospace")
+        self.cwd_label.set_wrap(True)
+        self.cwd_label.set_wrap_mode(Gtk.WrapMode.CHAR)
+        self.cwd_label.set_max_width_chars(34)
         sidebar.append(host_label)
-        sidebar.append(cwd_label)
+        sidebar.append(self.cwd_label)
 
         sidebar.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
         side_title = Gtk.Label(label="Recent Sessions", xalign=0)
@@ -639,8 +641,20 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._add_assistant_message(f"Running:\n```bash\n{command}\n```")
         self._set_input_enabled(False)
 
+        handled, code, output = self._maybe_handle_cd_command(command)
+        if handled:
+            message = f"Exit {code}\n```text\n{output}\n```"
+            self._finish_local_command(message)
+            return
+
         def _runner():
-            proc = subprocess.run(command, shell=True, text=True, capture_output=True)
+            proc = subprocess.run(
+                command,
+                shell=True,
+                text=True,
+                capture_output=True,
+                cwd=self.current_cwd,
+            )
             output = (proc.stdout or "") + (proc.stderr or "")
             if len(output) > 6000:
                 output = output[:6000] + "\n...[truncated]..."
@@ -733,12 +747,18 @@ class PromptOSWindow(Adw.ApplicationWindow):
         if card:
             card.set_state("Running...")
 
+        handled, code, output = self._maybe_handle_cd_command(command)
+        if handled:
+            GLib.idle_add(self._on_card_finished, command, code, output)
+            return
+
         def _runner():
             proc = subprocess.run(
                 command,
                 shell=True,
                 text=True,
                 capture_output=True,
+                cwd=self.current_cwd,
             )
             output = (proc.stdout or "") + (proc.stderr or "")
             exit_code = proc.returncode
@@ -851,6 +871,34 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 return text if text else GUI_AGENT_FALLBACK
         except OSError:
             return GUI_AGENT_FALLBACK
+
+    def _update_cwd_label(self):
+        self.cwd_label.set_text(f"CWD: {self.current_cwd}")
+
+    def _maybe_handle_cd_command(self, command: str) -> tuple[bool, int, str]:
+        cmd = command.strip()
+        if not cmd:
+            return False, 1, "Empty command"
+        # Only handle simple shell built-in cd so cwd persists for future commands.
+        if any(op in cmd for op in ("&&", "||", ";", "|")):
+            return False, 0, ""
+        try:
+            parts = shlex.split(cmd)
+        except ValueError as e:
+            return True, 2, f"Invalid command syntax: {e}"
+        if not parts or parts[0] != "cd":
+            return False, 0, ""
+        if len(parts) > 2:
+            return True, 2, "cd takes at most one path argument"
+        target = parts[1] if len(parts) == 2 else "~"
+        target = os.path.expanduser(target)
+        if not os.path.isabs(target):
+            target = os.path.abspath(os.path.join(self.current_cwd, target))
+        if not os.path.isdir(target):
+            return True, 1, f"cd: no such directory: {target}"
+        self.current_cwd = target
+        self._update_cwd_label()
+        return True, 0, f"Changed directory to {self.current_cwd}"
 
     def _set_suggested_next(self, text: str):
         cleaned = " ".join((text or "").split())
