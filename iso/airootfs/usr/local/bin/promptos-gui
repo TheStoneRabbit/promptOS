@@ -33,7 +33,7 @@ except ImportError:
 try:
     gi.require_version("Gtk", "4.0")
     gi.require_version("Adw", "1")
-    from gi.repository import Adw, GLib, Gtk, Pango
+    from gi.repository import Adw, GLib, Gtk, Pango, Gdk
 except (ValueError, ImportError):
     print("promptos-gui requires gtk4 and libadwaita. Install: sudo pacman -S gtk4 libadwaita")
     raise SystemExit(1)
@@ -439,7 +439,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         page.append(root)
 
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        sidebar.set_size_request(300, -1)
+        sidebar.set_size_request(340, -1)
         sidebar.set_margin_top(12)
         sidebar.set_margin_bottom(12)
         sidebar.set_margin_start(12)
@@ -545,10 +545,20 @@ class PromptOSWindow(Adw.ApplicationWindow):
         composer.append(suggest_row)
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.entry = Gtk.Entry()
+        self.entry = Gtk.TextView()
         self.entry.set_hexpand(True)
-        self.entry.set_placeholder_text("Message promptOS...")
-        self.entry.connect("activate", lambda *_: self._submit())
+        self.entry.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.entry.set_top_margin(8)
+        self.entry.set_bottom_margin(8)
+        self.entry.set_left_margin(8)
+        self.entry.set_right_margin(8)
+        self.entry.connect("key-press-event", self._on_entry_key_press)
+        entry_scroll = Gtk.ScrolledWindow()
+        entry_scroll.set_hexpand(True)
+        entry_scroll.set_min_content_height(82)
+        entry_scroll.set_max_content_height(160)
+        entry_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        entry_scroll.set_child(self.entry)
 
         send = Gtk.Button(label="Send")
         send.add_css_class("suggested-action")
@@ -558,7 +568,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.stop_btn.connect("clicked", lambda *_: self._stop_generation())
         self.stop_btn.set_sensitive(False)
 
-        row.append(self.entry)
+        row.append(entry_scroll)
         row.append(send)
         row.append(self.stop_btn)
         composer.append(row)
@@ -610,7 +620,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             child = nxt
 
     def _use_quick_prompt(self, text: str):
-        self.entry.set_text(text)
+        self.entry.get_buffer().set_text(text)
         self._submit()
 
     def _add_bubble(self, role: str, text: str) -> ChatBubble:
@@ -652,13 +662,17 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.send_btn.set_sensitive(enabled)
         self.stop_btn.set_sensitive(not enabled)
         if enabled:
-            self.entry.grab_focus()
+            if not self.autorun_commands and self.pending_cards:
+                self._focus_run_on_next_pending_card()
+            else:
+                self.entry.grab_focus()
 
     def _submit(self):
-        text = self.entry.get_text().strip()
+        buf = self.entry.get_buffer()
+        text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
         if not text:
             return
-        self.entry.set_text("")
+        buf.set_text("")
         self.follow_output = True
 
         if text.startswith("/"):
@@ -1228,7 +1242,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             title_lbl = Gtk.Label(label=title, xalign=0)
             title_lbl.add_css_class("heading")
-            title_lbl.set_max_width_chars(28)
+            title_lbl.set_max_width_chars(34)
             title_lbl.set_ellipsize(Pango.EllipsizeMode.END)
             title_lbl.set_wrap(False)
             title_lbl.set_hexpand(True)
@@ -1843,12 +1857,35 @@ class PromptOSWindow(Adw.ApplicationWindow):
     def _use_suggested_next(self):
         if not self.suggested_next_text:
             return
-        self.entry.set_text(self.suggested_next_text)
+        self.entry.get_buffer().set_text(self.suggested_next_text)
         self.entry.grab_focus()
 
     def _use_specific_suggestion(self, suggestion: str):
-        self.entry.set_text(suggestion)
+        self.entry.get_buffer().set_text(suggestion)
         self.entry.grab_focus()
+
+    def _on_entry_key_press(self, _widget, event):
+        key = event.keyval
+        shift = bool(event.state & Gdk.ModifierType.SHIFT_MASK)
+        if key in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            if shift:
+                return False  # Insert newline
+            if not self.autorun_commands and self.pending_cards:
+                self._run_next_pending_card_from_keyboard()
+                return True
+            self._submit()
+            return True
+        return False
+
+    def _run_next_pending_card_from_keyboard(self):
+        # Prefer a non-queued pending command first.
+        for command in self.pending_cards.keys():
+            if command not in self.command_queue:
+                self._run_command_card(command)
+                return
+        for command in self.pending_cards.keys():
+            self._run_command_card(command)
+            return
 
     def _request_suggested_next_async(self):
         if not self.active_provider or len(self.history) < 2:
