@@ -82,6 +82,12 @@ GUI_AGENT_FALLBACK = (
     "You are promptOS assistant. Be concise, practical, and safe. "
     "Use CMD: only for commands that should be user-approved."
 )
+MODEL_ENV_BY_PROVIDER = {
+    "claude": "PROMPTOS_CLAUDE_MODEL",
+    "openai": "PROMPTOS_OPENAI_MODEL",
+    "groq": "PROMPTOS_GROQ_MODEL",
+    "ollama": "PROMPTOS_OLLAMA_MODEL",
+}
 SUDO_PREFIX_RE = re.compile(r"^\s*(?:/usr/bin/)?sudo\b\s*")
 INLINE_SUDO_RE = re.compile(r"(^|[;&|]\s*)((?:/usr/bin/)?sudo)\b(?!\s+-A)", re.IGNORECASE)
 
@@ -537,8 +543,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
     def _load_provider(self):
         override = os.environ.get("PROMPTOS_PROVIDER")
         self.active_provider = get_provider(None if override == "auto" else override)
-        provider_name = self.active_provider.name if self.active_provider else "none"
-        self.provider_badge.set_text(f"Provider: {provider_name}")
+        self._refresh_provider_badge()
 
     def _new_chat(self):
         system_prompt = (self._load_gui_agent_prompt() + self._build_runtime_context()).strip()
@@ -674,6 +679,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 "- /history\n"
                 "- /providers\n"
                 "- /switch <provider>\n"
+                "- /llm-model show\n"
+                "- /llm-model set <provider> <model>\n"
+                "- /llm-model set <model> (current provider)\n"
                 "- /save [name]\n"
                 "- /load <name>\n"
                 "- /sessions\n"
@@ -716,6 +724,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
             self._refresh_provider_badge()
             self._refresh_system_message()
             self._add_assistant_message(f"Switched provider to `{name}`.")
+            return
+        if cmd.startswith("/llm-model"):
+            self._handle_llm_model_command(cmd)
             return
         if cmd.startswith("/save"):
             parts = cmd.split(" ", 1)
@@ -825,7 +836,76 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
     def _refresh_provider_badge(self):
         name = self.active_provider.name if self.active_provider else "none"
-        self.provider_badge.set_text(f"Provider: {name}")
+        model = getattr(self.active_provider, "model", None) if self.active_provider else None
+        if model:
+            self.provider_badge.set_text(f"Provider: {name} • {model}")
+        else:
+            self.provider_badge.set_text(f"Provider: {name}")
+
+    def _handle_llm_model_command(self, cmd: str):
+        parts = cmd.split()
+        # /llm-model
+        if len(parts) == 1:
+            self._show_current_models()
+            return
+        # /llm-model show
+        if len(parts) == 2 and parts[1] == "show":
+            self._show_current_models()
+            return
+        # /llm-model set ...
+        if len(parts) >= 3 and parts[1] == "set":
+            # /llm-model set <model>  (for active provider)
+            if len(parts) == 3:
+                if not self.active_provider:
+                    self._add_assistant_message("No active provider to set model for.")
+                    return
+                provider_name = self.active_provider.name
+                model = parts[2]
+            else:
+                provider_name = parts[2].lower()
+                model = " ".join(parts[3:]).strip()
+            self._set_provider_model(provider_name, model)
+            return
+        self._add_assistant_message(
+            "Usage:\n"
+            "- /llm-model show\n"
+            "- /llm-model set <provider> <model>\n"
+            "- /llm-model set <model>"
+        )
+
+    def _show_current_models(self):
+        lines = ["Current provider models:"]
+        for provider, env_key in MODEL_ENV_BY_PROVIDER.items():
+            value = os.environ.get(env_key, "(default)")
+            active = " (active)" if self.active_provider and self.active_provider.name == provider else ""
+            lines.append(f"- {provider}: {value}{active}")
+        self._add_assistant_message("\n".join(lines))
+
+    def _set_provider_model(self, provider_name: str, model: str):
+        if provider_name not in MODEL_ENV_BY_PROVIDER:
+            self._add_assistant_message(
+                "Unknown provider. Use one of: claude, openai, groq, ollama."
+            )
+            return
+        if not model:
+            self._add_assistant_message("Model cannot be empty.")
+            return
+        env_key = MODEL_ENV_BY_PROVIDER[provider_name]
+        os.environ[env_key] = model
+        # Rebind provider if this is active or if no provider yet.
+        if (self.active_provider and self.active_provider.name == provider_name) or not self.active_provider:
+            p = get_provider(provider_name)
+            if p:
+                self.active_provider = p
+                self._refresh_provider_badge()
+                self._refresh_system_message()
+                self._add_assistant_message(f"Set `{provider_name}` model to `{model}`.")
+                return
+            self._add_assistant_message(
+                f"Saved `{provider_name}` model as `{model}`, but provider is currently unavailable."
+            )
+            return
+        self._add_assistant_message(f"Set `{provider_name}` model to `{model}`.")
 
     def _on_autorun_toggled(self, switch: Gtk.Switch, _param):
         self.autorun_commands = switch.get_active()

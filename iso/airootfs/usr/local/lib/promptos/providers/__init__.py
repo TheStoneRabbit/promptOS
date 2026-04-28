@@ -25,14 +25,45 @@ _REGISTRY: dict[str, type[Provider]] = {
     "groq": GroqProvider,
 }
 
+_MODEL_ENV = {
+    "claude": "PROMPTOS_CLAUDE_MODEL",
+    "openai": "PROMPTOS_OPENAI_MODEL",
+    "groq": "PROMPTOS_GROQ_MODEL",
+    "ollama": "PROMPTOS_OLLAMA_MODEL",
+}
+
+_MODEL_DEFAULT = {
+    "claude": "claude-sonnet-4-6",
+    "openai": "gpt-4.1",
+    "groq": "llama-3.1-8b-instant",
+    "ollama": "mistral:7b-instruct",
+}
+
+
+def _model_for(name: str) -> str:
+    env_key = _MODEL_ENV[name]
+    return os.environ.get(env_key, _MODEL_DEFAULT[name])
+
+
+def _build_provider(name: str) -> Provider:
+    if name == "claude":
+        return ClaudeProvider(model=_model_for("claude"))
+    if name == "openai":
+        return OpenAIProvider(model=_model_for("openai"))
+    if name == "groq":
+        return GroqProvider(model=_model_for("groq"))
+    if name == "ollama":
+        return OllamaProvider(model=_model_for("ollama"))
+    raise ValueError(f"Unknown provider '{name}'. Choose from: {list(_REGISTRY)}")
+
 
 def all_providers() -> list[Provider]:
     """Return instantiated providers from config/env."""
     return [
-        ClaudeProvider(),
-        OpenAIProvider(model=os.environ.get("PROMPTOS_OPENAI_MODEL", "gpt-4.1")),
-        GroqProvider(),
-        OllamaProvider(model=os.environ.get("PROMPTOS_OLLAMA_MODEL", "mistral:7b-instruct")),
+        _build_provider("claude"),
+        _build_provider("openai"),
+        _build_provider("groq"),
+        _build_provider("ollama"),
     ]
 
 
@@ -42,13 +73,9 @@ def get_provider(name: str | None = None) -> Provider | None:
     If name is given, return that specific provider (or None if unavailable).
     """
     if name:
-        cls = _REGISTRY.get(name)
-        if not cls:
+        if name not in _REGISTRY:
             raise ValueError(f"Unknown provider '{name}'. Choose from: {list(_REGISTRY)}")
-        if name == "ollama":
-            p = OllamaProvider(model=os.environ.get("PROMPTOS_OLLAMA_MODEL", "mistral:7b-instruct"))
-        else:
-            p = cls()
+        p = _build_provider(name)
         return p if p.available() else None
 
     # Auto-select by priority
