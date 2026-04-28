@@ -552,7 +552,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.entry.set_bottom_margin(8)
         self.entry.set_left_margin(8)
         self.entry.set_right_margin(8)
-        self.entry.connect("key-press-event", self._on_entry_key_press)
+        self.entry_key_controller = Gtk.EventControllerKey.new()
+        self.entry_key_controller.connect("key-pressed", self._on_entry_key_pressed)
+        self.entry.add_controller(self.entry_key_controller)
         entry_scroll = Gtk.ScrolledWindow()
         entry_scroll.set_hexpand(True)
         entry_scroll.set_min_content_height(82)
@@ -1864,9 +1866,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.entry.get_buffer().set_text(suggestion)
         self.entry.grab_focus()
 
-    def _on_entry_key_press(self, _widget, event):
-        key = event.keyval
-        shift = bool(event.state & Gdk.ModifierType.SHIFT_MASK)
+    def _on_entry_key_pressed(self, _controller, key, _keycode, state):
+        shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
         if key in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
             if shift:
                 return False  # Insert newline
