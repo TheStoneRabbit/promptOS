@@ -488,6 +488,7 @@ def install_promptos():
     copies = [
         ("/usr/local/bin/promptsh",       f"{MOUNTPOINT}/usr/local/bin/promptsh"),
         ("/usr/local/bin/promptos-keys",  f"{MOUNTPOINT}/usr/local/bin/promptos-keys"),
+        ("/usr/local/bin/promptos-gui",   f"{MOUNTPOINT}/usr/local/bin/promptos-gui"),
         ("/usr/local/bin/promptos-install", f"{MOUNTPOINT}/usr/local/bin/promptos-install"),
         ("/usr/local/lib/promptos",        f"{MOUNTPOINT}/usr/local/lib/promptos"),
         ("/etc/promptos",                  f"{MOUNTPOINT}/etc/promptos"),
@@ -498,7 +499,7 @@ def install_promptos():
             run(f"cp -a {src} {dst}", check=False)
 
     # Make scripts executable
-    for script in ["promptsh", "promptos-keys", "promptos-install"]:
+    for script in ["promptsh", "promptos-keys", "promptos-gui", "promptos-install"]:
         path = f"{MOUNTPOINT}/usr/local/bin/{script}"
         if os.path.exists(path):
             os.chmod(path, 0o755)

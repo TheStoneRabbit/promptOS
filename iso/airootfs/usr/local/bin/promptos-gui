@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+"""
+promptos-gui — MVP graphical interface for promptOS.
+
+Features:
+- Sidebar with quick status + sessions list
+- Main transcript view streaming from promptsh
+- CMD cards with Run / Skip buttons
+- Composer + quick actions
+"""
+
+from __future__ import annotations
+
+import os
+import pty
+import re
+import shlex
+import socket
+import subprocess
+import threading
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, GLib, Gtk
+
+
+ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+CMD_RE = re.compile(r"^\s*CMD:\s*(.+?)\s*$", re.MULTILINE)
+PROMPT_RE = re.compile(r"promptOS\s+.*?>\s*$")
+PROVIDER_RE = re.compile(r"provider:\s*([a-zA-Z0-9_-]+)")
+
+
+class CommandCard(Gtk.Frame):
+    def __init__(self, command: str, on_run, on_skip):
+        super().__init__()
+        self.command = command
+        self.set_margin_top(6)
+        self.set_margin_bottom(6)
+        self.set_margin_start(6)
+        self.set_margin_end(6)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+
+        title = Gtk.Label(label="CMD", xalign=0)
+        title.add_css_class("heading")
+        cmd_label = Gtk.Label(label=command, xalign=0)
+        cmd_label.set_selectable(True)
+        cmd_label.set_wrap(True)
+        cmd_label.add_css_class("monospace")
+
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        run_btn = Gtk.Button(label="Run")
+        run_btn.add_css_class("suggested-action")
+        run_btn.connect("clicked", lambda *_: on_run(self.command))
+        skip_btn = Gtk.Button(label="Skip")
+        skip_btn.connect("clicked", lambda *_: on_skip(self.command))
+        actions.append(run_btn)
+        actions.append(skip_btn)
+
+        self.state_label = Gtk.Label(label="Pending", xalign=0)
+        self.state_label.add_css_class("dim-label")
+
+        box.append(title)
+        box.append(cmd_label)
+        box.append(actions)
+        box.append(self.state_label)
+        self.set_child(box)
+
+    def set_state(self, text: str):
+        self.state_label.set_text(text)
+
+
+class PromptOSWindow(Adw.ApplicationWindow):
+    def __init__(self, app: Adw.Application):
+        super().__init__(application=app)
+        self.set_title("promptOS Control Center")
+        self.set_default_size(1280, 820)
+
+        self.master_fd: int | None = None
+        self.backend_proc: subprocess.Popen | None = None
+        self.buffer = ""
+        self.pending_cards: dict[str, CommandCard] = {}
+
+        self._build_ui()
+        self._refresh_sessions()
+        self._start_backend()
+
+    def _build_ui(self):
+        header = Adw.HeaderBar()
+        self.set_titlebar(header)
+
+        shell = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.set_content(shell)
+
+        self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.sidebar.set_size_request(280, -1)
+        self.sidebar.set_margin_top(12)
+        self.sidebar.set_margin_bottom(12)
+        self.sidebar.set_margin_start(12)
+        self.sidebar.set_margin_end(12)
+        shell.append(self.sidebar)
+
+        host = socket.gethostname()
+        self.host_label = Gtk.Label(label=f"Host: {host}", xalign=0)
+        self.provider_label = Gtk.Label(label="Provider: unknown", xalign=0)
+        self.net_label = Gtk.Label(label=f"CWD: {os.getcwd()}", xalign=0)
+        for label in (self.host_label, self.provider_label, self.net_label):
+            label.add_css_class("monospace")
+            self.sidebar.append(label)
+
+        self.sidebar.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        sessions_title = Gtk.Label(label="Sessions", xalign=0)
+        sessions_title.add_css_class("heading")
+        self.sidebar.append(sessions_title)
+
+        self.sessions_list = Gtk.ListBox()
+        self.sessions_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        sessions_scroll = Gtk.ScrolledWindow()
+        sessions_scroll.set_vexpand(True)
+        sessions_scroll.set_child(self.sessions_list)
+        self.sidebar.append(sessions_scroll)
+
+        refresh_btn = Gtk.Button(label="Refresh Sessions")
+        refresh_btn.connect("clicked", lambda *_: self._refresh_sessions())
+        self.sidebar.append(refresh_btn)
+
+        main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        main.set_margin_top(12)
+        main.set_margin_bottom(12)
+        main.set_margin_end(12)
+        main.set_hexpand(True)
+        shell.append(main)
+
+        self.transcript_buffer = Gtk.TextBuffer()
+        self.transcript_view = Gtk.TextView(buffer=self.transcript_buffer)
+        self.transcript_view.set_editable(False)
+        self.transcript_view.set_monospace(True)
+        self.transcript_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+
+        transcript_scroll = Gtk.ScrolledWindow()
+        transcript_scroll.set_vexpand(True)
+        transcript_scroll.set_child(self.transcript_view)
+        main.append(transcript_scroll)
+
+        cmd_title = Gtk.Label(label="Command Cards", xalign=0)
+        cmd_title.add_css_class("heading")
+        main.append(cmd_title)
+
+        self.cmd_cards_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        cmd_scroll = Gtk.ScrolledWindow()
+        cmd_scroll.set_min_content_height(180)
+        cmd_scroll.set_child(self.cmd_cards_box)
+        main.append(cmd_scroll)
+
+        quick = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        for label, command in [
+            ("/wifi", "/wifi"),
+            ("/model", "/model status"),
+            ("/providers", "/providers"),
+            ("/autorun", "/autorun"),
+        ]:
+            btn = Gtk.Button(label=label)
+            btn.connect("clicked", lambda _, cmd=command: self._send_to_backend(cmd))
+            quick.append(btn)
+        main.append(quick)
+
+        composer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.entry = Gtk.Entry()
+        self.entry.set_hexpand(True)
+        self.entry.set_placeholder_text("Type message or command...")
+        self.entry.connect("activate", lambda *_: self._submit_prompt())
+        send_btn = Gtk.Button(label="Send")
+        send_btn.add_css_class("suggested-action")
+        send_btn.connect("clicked", lambda *_: self._submit_prompt())
+        composer.append(self.entry)
+        composer.append(send_btn)
+        main.append(composer)
+
+    def _start_backend(self):
+        master_fd, slave_fd = pty.openpty()
+        env = os.environ.copy()
+        env.setdefault("TERM", "xterm-256color")
+        self.backend_proc = subprocess.Popen(
+            ["promptsh"],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+            env=env,
+        )
+        os.close(slave_fd)
+        self.master_fd = master_fd
+
+        channel = GLib.IOChannel.unix_new(master_fd)
+        channel.set_encoding(None)
+        GLib.io_add_watch(
+            channel,
+            GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR,
+            self._on_backend_io,
+        )
+
+        # Ensure the GUI controls command execution via cards.
+        GLib.timeout_add(450, self._init_promptsh_state)
+
+    def _init_promptsh_state(self) -> bool:
+        self._send_to_backend("/autorun off")
+        return False
+
+    def _on_backend_io(self, _channel, condition):
+        if condition & (GLib.IO_HUP | GLib.IO_ERR):
+            self._append_transcript("\n[backend disconnected]\n")
+            return False
+        if not self.master_fd:
+            return True
+        try:
+            raw = os.read(self.master_fd, 8192)
+        except OSError:
+            return False
+        if not raw:
+            return True
+        text = raw.decode(errors="replace")
+        clean = ANSI_RE.sub("", text)
+        self.buffer += clean
+
+        self._update_provider_from_text(clean)
+        self._append_transcript(self._strip_prompt_lines(clean))
+        self._parse_cmd_cards(clean)
+
+        if "Run? [Y/n]" in clean:
+            # Keep promptsh from blocking on inline confirmations.
+            self._send_to_backend("n")
+        return True
+
+    def _update_provider_from_text(self, text: str):
+        match = PROVIDER_RE.search(text)
+        if match:
+            self.provider_label.set_text(f"Provider: {match.group(1)}")
+
+    def _strip_prompt_lines(self, text: str) -> str:
+        lines = text.splitlines()
+        filtered = [line for line in lines if not PROMPT_RE.search(line)]
+        return ("\n".join(filtered) + ("\n" if text.endswith("\n") else ""))
+
+    def _append_transcript(self, text: str):
+        if not text:
+            return
+        end_iter = self.transcript_buffer.get_end_iter()
+        self.transcript_buffer.insert(end_iter, text)
+        mark = self.transcript_buffer.create_mark(None, self.transcript_buffer.get_end_iter(), False)
+        self.transcript_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+
+    def _parse_cmd_cards(self, text: str):
+        for cmd in CMD_RE.findall(text):
+            command = cmd.strip().strip("`")
+            if not command or command in self.pending_cards:
+                continue
+            card = CommandCard(command, self._run_command_card, self._skip_command_card)
+            self.pending_cards[command] = card
+            self.cmd_cards_box.append(card)
+
+    def _submit_prompt(self):
+        text = self.entry.get_text().strip()
+        if not text:
+            return
+        self.entry.set_text("")
+        self._append_transcript(f"\n[user] {text}\n")
+        self._send_to_backend(text)
+
+    def _send_to_backend(self, text: str):
+        if self.master_fd is None:
+            return
+        try:
+            os.write(self.master_fd, (text + "\n").encode())
+        except OSError:
+            self._append_transcript("\n[failed to send to backend]\n")
+
+    def _run_command_card(self, command: str):
+        card = self.pending_cards.get(command)
+        if card:
+            card.set_state("Running...")
+        self._append_transcript(f"\n[run] {command}\n")
+
+        def _runner():
+            proc = subprocess.run(
+                command,
+                shell=True,
+                text=True,
+                capture_output=True,
+            )
+            output = (proc.stdout or "") + (proc.stderr or "")
+            if len(output) > 6000:
+                output = output[:6000] + "\n...[truncated]..."
+            GLib.idle_add(self._on_card_finished, command, proc.returncode, output)
+
+        threading.Thread(target=_runner, daemon=True).start()
+
+    def _skip_command_card(self, command: str):
+        card = self.pending_cards.get(command)
+        if card:
+            card.set_state("Skipped")
+        self._append_transcript(f"[skip] {command}\n")
+
+    def _on_card_finished(self, command: str, code: int, output: str):
+        card = self.pending_cards.get(command)
+        if card:
+            card.set_state(f"Finished (exit {code})")
+        self._append_transcript(f"[result] exit {code}\n{output}\n")
+        return False
+
+    def _refresh_sessions(self):
+        child = self.sessions_list.get_first_child()
+        while child:
+            nxt = child.get_next_sibling()
+            self.sessions_list.remove(child)
+            child = nxt
+
+        sessions_dir = Path.home() / ".promptsh" / "sessions"
+        if not sessions_dir.exists():
+            row = Gtk.Label(label="No saved sessions", xalign=0)
+            self.sessions_list.append(row)
+            return
+
+        entries = sorted(sessions_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not entries:
+            row = Gtk.Label(label="No saved sessions", xalign=0)
+            self.sessions_list.append(row)
+            return
+
+        for entry in entries[:40]:
+            label = Gtk.Label(label=entry.stem, xalign=0)
+            label.add_css_class("monospace")
+            self.sessions_list.append(label)
+
+    def close(self):
+        try:
+            if self.backend_proc and self.backend_proc.poll() is None:
+                self._send_to_backend("exit")
+                self.backend_proc.terminate()
+        except Exception:
+            pass
+        return super().close()
+
+
+class PromptOSApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="org.promptos.ControlCenter")
+
+    def do_activate(self):
+        window = self.props.active_window
+        if window is None:
+            window = PromptOSWindow(self)
+        window.present()
+
+
+def main():
+    app = PromptOSApp()
+    app.run()
+
+
+if __name__ == "__main__":
+    main()

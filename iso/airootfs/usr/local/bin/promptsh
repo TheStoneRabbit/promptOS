@@ -807,6 +807,7 @@ def print_help():
             "  [cyan]/keys[/cyan]              — show stored API keys\n"
             "  [cyan]/wifi[/cyan]              — connect to a WiFi network\n"
             "  [cyan]/model[/cyan]             — manage the local Ollama model (status / pull / ensure)\n"
+            "  [cyan]/gui[/cyan]               — launch the promptOS graphical interface\n"
             "  [cyan]/install[/cyan]           — install promptOS to disk\n"
             "  [cyan]!\\<cmd>[/cyan]             — run bash command directly\n"
             "  [cyan]!!\\<prompt>[/cyan]          — send to AI and auto-run any commands it suggests\n"
@@ -831,6 +832,7 @@ def print_help():
     /keys               — show stored API keys
     /wifi               — connect to a WiFi network
     /model [pull]       — show local model status (or pull if missing)
+    /gui                — launch the promptOS graphical interface
     /install            — install promptOS to disk
     !<cmd>              — run a bash command directly, bypassing AI
     !!<prompt>          — send to AI and auto-run any commands it suggests
@@ -1237,6 +1239,20 @@ def main():
                     print()
                 except FileNotFoundError:
                     print("  promptos-model not installed.\n")
+                continue
+
+            if user_input == "/gui":
+                try:
+                    subprocess.Popen(
+                        ["promptos-gui"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    print("  Launched promptos-gui.\n")
+                except FileNotFoundError:
+                    print("  promptos-gui not installed.\n")
                 continue
 
             if not active_provider:

@@ -45,6 +45,9 @@ python-pip
 python-requests
 python-rich
 python-prompt_toolkit
+python-gobject
+gtk4
+libadwaita
 
 # Build tools (needed for pip installs)
 base-devel
