@@ -794,8 +794,44 @@ class PromptOSWindow(Adw.ApplicationWindow):
         if output.strip():
             summary += f"\n\n```text\n{output}\n```"
         self._add_assistant_message(summary)
+        self._request_command_followup_async(command, code, output)
         self._request_suggested_next_async()
         self._start_next_queued_command()
+        return False
+
+    def _request_command_followup_async(self, command: str, code: int, output: str):
+        if not self.active_provider:
+            return
+        trimmed = (output or "").strip()
+        if len(trimmed) > 1200:
+            trimmed = trimmed[:1200] + "\n...[truncated]..."
+        feedback_lines = [
+            "[command results]",
+            f"$ {command} -> exit {code}",
+        ]
+        if trimmed:
+            feedback_lines.append(f"output:\n{trimmed}")
+        self.history.append(Message("user", "\n".join(feedback_lines)))
+        self._refresh_system_message()
+
+        def _worker():
+            try:
+                chunks = []
+                for chunk in self.active_provider.chat(self.history, stream=True):
+                    chunks.append(chunk)
+                response = "".join(chunks).strip()
+                if response:
+                    GLib.idle_add(self._on_command_followup_ready, response)
+            except Exception:
+                return
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_command_followup_ready(self, response: str):
+        self.history.append(Message("assistant", response))
+        self._add_assistant_message(response)
+        self._parse_cmd_cards(response)
+        self._request_suggested_next_async()
         return False
 
     def _refresh_sessions(self):
