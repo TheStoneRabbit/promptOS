@@ -18,6 +18,8 @@ import subprocess
 import threading
 import json
 import shlex
+import getpass
+import time
 from pathlib import Path
 
 try:
@@ -513,7 +515,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.provider_badge.set_text(f"Provider: {provider_name}")
 
     def _new_chat(self):
-        system_prompt = self._load_gui_agent_prompt()
+        system_prompt = (self._load_gui_agent_prompt() + self._build_runtime_context()).strip()
         self.history = [
             Message(
                 "system",
@@ -592,6 +594,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
         self._add_user_message(text)
         self.history.append(Message("user", text))
+        self._refresh_system_message()
         self._set_input_enabled(False)
 
         bubble = self._add_bubble("assistant", "")
@@ -865,6 +868,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 self._add_user_message(msg.content)
             elif msg.role == "assistant":
                 self._add_assistant_message(msg.content)
+        self._refresh_system_message()
         self._request_suggested_next_async()
 
     def _load_gui_agent_prompt(self) -> str:
@@ -875,8 +879,47 @@ class PromptOSWindow(Adw.ApplicationWindow):
         except OSError:
             return GUI_AGENT_FALLBACK
 
+    def _build_runtime_context(self) -> str:
+        try:
+            user = getpass.getuser()
+        except Exception:
+            user = os.environ.get("USER", "unknown")
+        try:
+            uid = os.geteuid()
+        except Exception:
+            uid = -1
+        priv = "root/full system access" if uid == 0 else "regular user — sudo for elevated commands"
+        provider = self.active_provider.name if self.active_provider else "none"
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        tz = time.strftime("%Z%z")
+        host = socket.gethostname()
+        home = os.path.expanduser("~")
+        return (
+            "\n\n## Live GUI Runtime Context\n"
+            f"- Hostname: {host}\n"
+            f"- User: {user}\n"
+            f"- UID: {uid}\n"
+            f"- Privileges: {priv}\n"
+            f"- Home: {home}\n"
+            f"- Current working directory: {self.current_cwd}\n"
+            f"- Active provider: {provider}\n"
+            f"- Local time: {now} {tz}\n"
+            "- Command execution model: GUI executes suggested CMD lines and slash commands locally.\n"
+            "- Working directory is persistent and can be changed with `cd`.\n"
+            "- Do not claim lack of system context; suggest verification commands when needed.\n"
+        )
+
+    def _refresh_system_message(self):
+        base = self._load_gui_agent_prompt()
+        content = (base + self._build_runtime_context()).strip()
+        if self.history and self.history[0].role == "system":
+            self.history[0] = Message("system", content)
+        else:
+            self.history.insert(0, Message("system", content))
+
     def _update_cwd_label(self):
         self.cwd_label.set_text(f"CWD: {self.current_cwd}")
+        self._refresh_system_message()
 
     def _maybe_handle_cd_command(self, command: str) -> tuple[bool, int, str]:
         cmd = command.strip()
@@ -953,6 +996,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
     def _request_suggested_next_async(self):
         if not self.active_provider or len(self.history) < 2:
             return
+        self._refresh_system_message()
         self.suggest_request_seq += 1
         req_id = self.suggest_request_seq
         GLib.idle_add(self._set_suggested_next, "Thinking...")
