@@ -61,6 +61,12 @@ label.md-heading {
 }
 """
 
+GUI_AGENT_MD = "/usr/local/lib/promptos/AGENT_GUI.md"
+GUI_AGENT_FALLBACK = (
+    "You are promptOS assistant. Be concise, practical, and safe. "
+    "Use CMD: only for commands that should be user-approved."
+)
+
 
 class ChatBubble(Gtk.Box):
     def __init__(self, role: str, text: str = ""):
@@ -356,9 +362,14 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
         autorun_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         autorun_label = Gtk.Label(label="Autorun CMD")
+        autorun_label.set_valign(Gtk.Align.CENTER)
         self.autorun_switch = Gtk.Switch()
         self.autorun_switch.set_active(False)
+        self.autorun_switch.set_valign(Gtk.Align.CENTER)
+        self.autorun_switch.set_halign(Gtk.Align.START)
+        self.autorun_switch.set_size_request(-1, -1)
         self.autorun_switch.connect("notify::active", self._on_autorun_toggled)
+        autorun_box.set_valign(Gtk.Align.CENTER)
         autorun_box.append(autorun_label)
         autorun_box.append(self.autorun_switch)
         topbar.append(autorun_box)
@@ -481,10 +492,11 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.provider_badge.set_text(f"Provider: {provider_name}")
 
     def _new_chat(self):
+        system_prompt = self._load_gui_agent_prompt()
         self.history = [
             Message(
                 "system",
-                "You are promptOS assistant. Be concise, practical, and safe. Use CMD: only for commands that should be user-approved.",
+                system_prompt,
             )
         ]
         self.pending_cards.clear()
@@ -790,7 +802,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 0,
                 Message(
                     "system",
-                    "You are promptOS assistant. Be concise, practical, and safe. Use CMD: only for commands that should be user-approved.",
+                    self._load_gui_agent_prompt(),
                 ),
             )
 
@@ -806,6 +818,14 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 self._add_user_message(msg.content)
             elif msg.role == "assistant":
                 self._add_assistant_message(msg.content)
+
+    def _load_gui_agent_prompt(self) -> str:
+        try:
+            with open(GUI_AGENT_MD) as f:
+                text = f.read().strip()
+                return text if text else GUI_AGENT_FALLBACK
+        except OSError:
+            return GUI_AGENT_FALLBACK
 
 
 class PromptOSApp(Adw.Application):
