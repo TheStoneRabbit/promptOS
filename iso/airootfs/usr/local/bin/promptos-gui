@@ -300,6 +300,7 @@ class CommandCard(Gtk.Frame):
         run_btn = Gtk.Button(label="Run")
         run_btn.add_css_class("suggested-action")
         run_btn.connect("clicked", lambda *_: on_run(self.command))
+        self.run_btn = run_btn
 
         skip_btn = Gtk.Button(label="Dismiss")
         skip_btn.connect("clicked", lambda *_: on_skip(self.command))
@@ -318,6 +319,11 @@ class CommandCard(Gtk.Frame):
 
     def set_state(self, text: str):
         self.state.set_text(text)
+
+    def set_run_as_default(self, window: Gtk.Window):
+        self.run_btn.set_can_default(True)
+        self.run_btn.grab_default()
+        window.set_default_widget(self.run_btn)
 
 
 class PromptOSWindow(Adw.ApplicationWindow):
@@ -1008,6 +1014,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
             card = CommandCard(command, self._run_command_card, self._skip_command_card)
             self.pending_cards[command] = card
             self.cmd_cards_box.append(card)
+            if not self.autorun_commands:
+                card.set_run_as_default(self)
             if self.autorun_commands:
                 self._run_command_card(command)
 
