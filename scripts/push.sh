@@ -65,6 +65,8 @@ FILES=(
     etc/dconf/profile/
     etc/dconf/db/local.d/
     etc/dconf/db/gdm.d/
+    usr/share/applications/org.promptos.ControlCenter.desktop
+    usr/share/icons/hicolor/
     usr/share/backgrounds/promptos/
     usr/share/promptos/
 )
@@ -116,6 +118,12 @@ systemctl reload sshd 2>/dev/null || true
 # then bounce gdm if it's installed so the login screen picks them up.
 if command -v dconf >/dev/null 2>&1; then
     dconf update 2>/dev/null || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f /usr/share/icons/hicolor 2>/dev/null || true
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database /usr/share/applications 2>/dev/null || true
 fi
 if systemctl is-enabled gdm.service >/dev/null 2>&1; then
     # Use try-restart so we don't kick a logged-in user unless gdm is already running.

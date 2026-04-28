@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=promptOS
+Comment=promptOS graphical interface
+Exec=promptos-gui
+Icon=org.promptos.ControlCenter
+Terminal=false
+Categories=System;Utility;
+StartupNotify=true
