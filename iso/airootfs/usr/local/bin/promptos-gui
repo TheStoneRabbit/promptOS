@@ -146,15 +146,31 @@ class ChatBubble(Gtk.Box):
             self._append_inline_markup_label(parent, line)
 
     def _append_inline_markup_label(self, parent: Gtk.Box, text: str):
-        # Escape for Pango markup, then re-introduce inline-code spans safely.
+        # Escape for Pango markup, then apply simple inline markdown.
         esc = (
             text.replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
         )
+
+        # Protect inline code first so markdown markers inside code are untouched.
+        code_chunks: list[str] = []
+
+        def _code_repl(match: re.Match[str]) -> str:
+            idx = len(code_chunks)
+            code_chunks.append(match.group(1))
+            return f"@@CODE{idx}@@"
+
+        esc = INLINE_CODE_RE.sub(_code_repl, esc)
         esc = STRONG_RE.sub(r"<b>\1</b>", esc)
         esc = EM_RE.sub(r"<i>\1</i>", esc)
-        esc = INLINE_CODE_RE.sub(r'<span font_family="monospace">`\1`</span>', esc)
+
+        for idx, code_text in enumerate(code_chunks):
+            esc = esc.replace(
+                f"@@CODE{idx}@@",
+                f'<span font_family="monospace">{code_text}</span>',
+            )
+
         lbl = Gtk.Label(xalign=0)
         lbl.set_wrap(True)
         lbl.set_wrap_mode(Gtk.WrapMode.CHAR)
