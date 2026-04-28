@@ -99,19 +99,25 @@ class ChatBubble(Gtk.Box):
     def _add_text_block(self, text: str):
         if not text:
             return
+        block = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         label = Gtk.Label(xalign=0)
         label.set_wrap(True)
         label.set_wrap_mode(Gtk.WrapMode.CHAR)
         label.set_selectable(True)
         label.set_max_width_chars(95)
         label.set_text(text)
-        self.inner.append(label)
+        copy_btn = Gtk.Button(label="Copy")
+        copy_btn.set_halign(Gtk.Align.START)
+        copy_btn.connect("clicked", lambda *_: self._copy_to_clipboard(text))
+        block.append(label)
+        block.append(copy_btn)
+        self.inner.append(block)
 
     def _add_code_block(self, code: str):
         frame = Gtk.Frame()
         frame.add_css_class("code-block")
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_margin_top(8)
         box.set_margin_bottom(8)
         box.set_margin_start(8)
@@ -124,9 +130,18 @@ class ChatBubble(Gtk.Box):
         tv.set_wrap_mode(Gtk.WrapMode.CHAR)
         tv.get_buffer().set_text(code.rstrip("\n"))
         box.append(tv)
+        copy_btn = Gtk.Button(label="Copy")
+        copy_btn.set_halign(Gtk.Align.START)
+        copy_btn.connect("clicked", lambda *_: self._copy_to_clipboard(code.rstrip("\n")))
+        box.append(copy_btn)
 
         frame.set_child(box)
         self.inner.append(frame)
+
+    def _copy_to_clipboard(self, text: str):
+        clipboard = self.get_clipboard()
+        if clipboard:
+            clipboard.set(text)
 
     def _set_rich_text(self, text: str):
         self._clear_inner()
@@ -529,13 +544,42 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.provider_badge.set_text(f"Provider: {name}")
 
     def _parse_cmd_cards(self, text: str):
-        for cmd in CMD_RE.findall(text):
-            command = cmd.strip().strip("`")
+        for command in self._extract_suggested_commands(text):
             if not command or command in self.pending_cards:
                 continue
             card = CommandCard(command, self._run_command_card, self._skip_command_card)
             self.pending_cards[command] = card
             self.cmd_cards_box.append(card)
+
+    def _extract_suggested_commands(self, text: str) -> list[str]:
+        cmds: list[str] = []
+        lines = text.splitlines()
+        i = 0
+        while i < len(lines):
+            stripped = lines[i].strip()
+            if not stripped.startswith("CMD:"):
+                i += 1
+                continue
+
+            payload = stripped[4:].strip()
+            if payload.startswith("```"):
+                i += 1
+                while i < len(lines):
+                    body = lines[i]
+                    if body.strip().startswith("```"):
+                        break
+                    candidate = body.strip().strip("`")
+                    if candidate:
+                        cmds.append(candidate)
+                    i += 1
+                i += 1
+                continue
+
+            candidate = payload.strip().strip("`")
+            if candidate:
+                cmds.append(candidate)
+            i += 1
+        return cmds
 
     def _run_command_card(self, command: str):
         card = self.pending_cards.get(command)
