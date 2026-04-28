@@ -208,17 +208,18 @@ class ChatBubble(Gtk.Box):
         copy_btn.set_can_focus(False)
         overlay.add_overlay(copy_btn)
 
-        tv = Gtk.TextView()
-        tv.set_editable(False)
-        tv.set_cursor_visible(False)
-        tv.set_monospace(True)
-        tv.set_wrap_mode(Gtk.WrapMode.CHAR)
+        code_label = Gtk.Label(xalign=0)
+        code_label.set_selectable(True)
+        code_label.set_wrap(True)
+        code_label.set_wrap_mode(Gtk.WrapMode.CHAR)
+        code_label.set_max_width_chars(95)
+        code_label.add_css_class("monospace")
         if (lang or "").lower() in ("text", "console", "log", "output", "stdout", "stderr"):
-            tv.add_css_class("output-block")
+            code_label.add_css_class("output-block")
         else:
-            tv.add_css_class("code-block-view")
-        tv.get_buffer().set_text(code.rstrip("\n"))
-        box.append(tv)
+            code_label.add_css_class("code-block-view")
+        code_label.set_text(code.rstrip("\n"))
+        box.append(code_label)
 
         overlay.set_child(box)
         frame.set_child(overlay)
