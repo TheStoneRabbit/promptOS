@@ -580,9 +580,13 @@ class PromptOSWindow(Adw.ApplicationWindow):
         send = Gtk.Button(label="Send")
         send.add_css_class("suggested-action")
         send.connect("clicked", lambda *_: self._submit())
+        send.set_valign(Gtk.Align.START)
+        send.set_vexpand(False)
         self.send_btn = send
         self.stop_btn = Gtk.Button(label="Stop")
         self.stop_btn.connect("clicked", lambda *_: self._stop_generation())
+        self.stop_btn.set_valign(Gtk.Align.START)
+        self.stop_btn.set_vexpand(False)
         self.stop_btn.set_sensitive(False)
 
         row.append(entry_scroll)
