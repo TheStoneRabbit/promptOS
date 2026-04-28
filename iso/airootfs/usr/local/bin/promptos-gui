@@ -1481,8 +1481,16 @@ class PromptOSWindow(Adw.ApplicationWindow):
             self._add_assistant_message(f"Failed to load session '{name}': {e}")
             return
 
+        if isinstance(data, dict):
+            data = data.get("messages", [])
+        if not isinstance(data, list):
+            self._add_assistant_message(f"Session '{name}' has invalid format.")
+            return
+
         loaded: list[Message] = []
         for item in data:
+            if not isinstance(item, dict):
+                continue
             role = item.get("role")
             content = item.get("content", "")
             if role not in ("system", "user", "assistant"):
