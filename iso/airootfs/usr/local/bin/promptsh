@@ -10,6 +10,7 @@ import sys
 import subprocess
 import time
 import getpass
+import shlex
 
 # Add promptOS library to path
 sys.path.insert(0, "/usr/local/lib/promptos")
@@ -50,6 +51,7 @@ except ImportError:
 
 HISTORY_FILE  = os.path.expanduser("~/.promptsh_history")
 SESSIONS_DIR  = os.path.expanduser("~/.promptsh/sessions")
+STATE_FILE    = os.path.expanduser("~/.promptsh/state.json")
 AGENT_MD      = "/usr/local/lib/promptos/AGENT.md"
 AUTORUN       = False  # set True to skip CMD: confirmation prompts
 
@@ -131,6 +133,46 @@ def forget_session(name: str) -> bool:
         os.remove(path)
         return True
     return False
+
+
+def _load_state() -> dict:
+    """Load persistent promptsh state (best effort)."""
+    try:
+        with open(STATE_FILE) as f:
+            data = _json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, OSError, _json.JSONDecodeError):
+        return {}
+
+
+def _save_state(data: dict):
+    """Persist promptsh state to disk (best effort)."""
+    try:
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        with open(STATE_FILE, "w") as f:
+            _json.dump(data, f, indent=2)
+    except OSError:
+        pass
+
+
+def _load_autorun_default() -> bool:
+    """Resolve autorun default from env/config + persisted state."""
+    env = os.environ.get("PROMPTOS_AUTORUN", "").strip().lower()
+    if env in ("1", "true", "yes", "on"):
+        return True
+    if env in ("0", "false", "no", "off"):
+        return False
+    state = _load_state()
+    value = state.get("autorun")
+    if isinstance(value, bool):
+        return value
+    return AUTORUN
+
+
+def _save_autorun_default(enabled: bool):
+    state = _load_state()
+    state["autorun"] = bool(enabled)
+    _save_state(state)
 
 
 # ── Tab completion ────────────────────────────────────────────────────────────
@@ -397,6 +439,169 @@ def is_pure_cd(cmd: str) -> bool:
     return not any(op in s for op in ("&&", "||", ";", "|", ">", "<", "&"))
 
 
+_NO_SUCH_PATH_MARKERS = (
+    "no such file or directory",
+    "cannot access",
+    "failed to open",
+    "not found",
+)
+_GUI_APPS = {
+    "xdg-open", "firefox", "chromium", "google-chrome", "brave-browser",
+    "nautilus", "thunar", "pcmanfm", "dolphin", "gedit", "kate",
+    "evince", "eog", "gimp", "vlc", "mpv", "code",
+}
+
+
+def _has_shell_operators(cmd: str) -> bool:
+    return any(op in cmd for op in ("&&", "||", ";", "|", ">", "<", "$(", "`"))
+
+
+def _command_tokens(cmd: str) -> list[str]:
+    try:
+        return shlex.split(cmd)
+    except ValueError:
+        return cmd.strip().split()
+
+
+def _normalize_pacman_noninteractive(cmd: str) -> str:
+    """Add --noconfirm to non-destructive pacman sync/install commands."""
+    if _has_shell_operators(cmd):
+        return cmd
+    tokens = _command_tokens(cmd)
+    if not tokens or os.path.basename(tokens[0]) != "pacman":
+        return cmd
+    args = tokens[1:]
+    if any(arg.startswith("-R") for arg in args):
+        return cmd
+    if not any(arg.startswith("-S") for arg in args):
+        return cmd
+    if "--noconfirm" in args:
+        return cmd
+    tokens.insert(1, "--noconfirm")
+    return shlex.join(tokens)
+
+
+def _is_safe_noninteractive(cmd: str) -> bool:
+    """Best-effort safety check for auto-running commands without prompt."""
+    if _has_shell_operators(cmd):
+        return False
+    tokens = _command_tokens(cmd)
+    if not tokens:
+        return False
+    name = os.path.basename(tokens[0])
+    args = tokens[1:]
+
+    read_only = {
+        "ls", "cat", "pwd", "whoami", "id", "date", "uptime", "df", "du",
+        "free", "ps", "pgrep", "grep", "find", "which", "whereis", "head",
+        "tail", "uname", "env", "printenv", "journalctl", "ip", "ss",
+        "ollama", "promptos-web",
+    }
+    if name in read_only:
+        if name == "ollama" and args and args[0] not in ("list", "show", "ps"):
+            return False
+        if name == "promptos-web" and args and args[0] not in ("search", "fetch"):
+            return False
+        return True
+
+    if name == "systemctl":
+        return bool(args and args[0] in ("status", "is-active", "is-enabled", "list-units", "list-unit-files"))
+
+    if name == "nmcli":
+        dangerous = {"connect", "disconnect", "up", "down", "add", "delete", "modify"}
+        return not any(a in dangerous for a in args)
+
+    if name == "pacman":
+        return any(a.startswith("-S") for a in args) and not any(a.startswith("-R") for a in args)
+
+    return False
+
+
+def _should_detach_gui(cmd: str) -> bool:
+    """Detach known GUI launch commands so promptsh stays responsive."""
+    if "&" in cmd or "nohup " in cmd or " disown" in cmd or _has_shell_operators(cmd):
+        return False
+    tokens = _command_tokens(cmd)
+    if not tokens:
+        return False
+    return os.path.basename(tokens[0]) in _GUI_APPS
+
+
+def _detach_gui_command(cmd: str) -> str:
+    return f"nohup {cmd} >/tmp/promptsh-gui.log 2>&1 < /dev/null &"
+
+
+def _extract_possible_paths(cmd: str) -> list[str]:
+    out: list[str] = []
+    for token in _command_tokens(cmd):
+        if token.startswith("-"):
+            continue
+        expanded = os.path.expanduser(os.path.expandvars(token))
+        if expanded.startswith(("/", "./", "../", "~")) or "/" in expanded:
+            out.append(expanded)
+    return out
+
+
+def _suggest_path_matches(path: str, max_results: int = 5) -> list[str]:
+    if os.path.exists(path):
+        return []
+    target = os.path.basename(path.rstrip("/"))
+    if not target:
+        return []
+
+    cwd = os.getcwd()
+    if os.path.isabs(path):
+        search_root = "/"
+    else:
+        search_root = cwd
+
+    results: list[str] = []
+    root_depth = search_root.rstrip(os.sep).count(os.sep)
+    pruned = {".git", ".cache", "node_modules", "proc", "sys", "dev", "run", "tmp"}
+
+    for root, dirs, files in os.walk(search_root, topdown=True):
+        # Keep search reasonably bounded on large trees.
+        if root.rstrip(os.sep).count(os.sep) - root_depth > 6:
+            dirs[:] = []
+            continue
+        dirs[:] = [d for d in dirs if d not in pruned]
+        for name in dirs + files:
+            lower = name.lower()
+            needle = target.lower()
+            if lower == needle or lower.startswith(needle) or needle in lower:
+                candidate = os.path.join(root, name)
+                display = candidate
+                if candidate.startswith(cwd + "/"):
+                    display = "./" + os.path.relpath(candidate, cwd)
+                results.append(display)
+                if len(results) >= max_results:
+                    return results
+    return results
+
+
+def _missing_path_hint(cmd: str, output: str) -> str:
+    lower = output.lower()
+    if not any(marker in lower for marker in _NO_SUCH_PATH_MARKERS):
+        return ""
+    suggestions: list[str] = []
+    for path in _extract_possible_paths(cmd):
+        if os.path.exists(path):
+            continue
+        matches = _suggest_path_matches(path, max_results=3)
+        for match in matches:
+            if match not in suggestions:
+                suggestions.append(match)
+            if len(suggestions) >= 5:
+                break
+        if len(suggestions) >= 5:
+            break
+    if not suggestions:
+        return ""
+    lines = ["Likely path issue. Did you mean one of these?"]
+    lines.extend(f"  - {m}" for m in suggestions)
+    return "\n".join(lines)
+
+
 def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
     """Run commands, return results for injection into AI history.
 
@@ -404,15 +609,33 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
     a dim │ bar so it reads like an indented quote/code block, with the cmd
     header in yellow on top and a trailing └─ exit N in green/red below."""
     results = []
-    for cmd in cmds:
+    for original_cmd in cmds:
+        cmd = _normalize_pacman_noninteractive(original_cmd)
+        notes: list[str] = []
+        if cmd != original_cmd:
+            notes.append("added --noconfirm for pacman")
+        if _should_detach_gui(cmd):
+            cmd = _detach_gui_command(cmd)
+            notes.append("detached GUI app launch")
+
         # Header — yellow with a leading marker so it's obviously a command.
         if RICH:
             console.print(f"\n[bold yellow]▶[/bold yellow] [yellow]{cmd}[/yellow]")
+            if notes:
+                console.print(f"[dim]{'; '.join(notes)}[/dim]")
         else:
             print(f"\n\033[1;33m▶\033[0m \033[33m{cmd}\033[0m")
+            if notes:
+                print(f"\033[2m{'; '.join(notes)}\033[0m")
 
         if autorun:
             confirmed = True
+        elif _is_safe_noninteractive(cmd):
+            confirmed = True
+            if RICH:
+                console.print("[dim]Auto-run (safe command).[/dim]")
+            else:
+                print("\033[2mAuto-run (safe command).\033[0m")
         else:
             try:
                 ans = (console.input("[dim]Run? \\[Y/n][/dim] ") if RICH else input("Run? [Y/n] ")).strip().lower()
@@ -425,6 +648,10 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
             # running in a child process that exits immediately.
             if is_pure_cd(cmd):
                 ok, msg = builtin_cd(cmd)
+                hint = _missing_path_hint(cmd, msg) if not ok else ""
+                if hint:
+                    print(hint)
+                    msg = f"{msg}\n{hint}"
                 if not ok:
                     print(msg)
                 results.append({
@@ -493,6 +720,10 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
                 interrupted = True
             proc.wait()
             output = "".join(output_chunks)
+            hint = _missing_path_hint(cmd, output)
+            if hint:
+                print(hint)
+                output = f"{output}\n{hint}"
             # Trailer — └─ followed by green/red exit code; makes the boundary
             # between command output and the next AI response obvious.
             if not interrupted:
@@ -748,7 +979,7 @@ def main():
 
     history: list[Message] = [Message("system", get_system_prompt())]
     active_provider = provider
-    autorun = AUTORUN
+    autorun = _load_autorun_default()
     ollama_warmed = False  # show a one-time "loading model" notice on first ollama prompt
 
     def save_history():
@@ -954,16 +1185,18 @@ def main():
             if user_input in ("/autorun", "/autorun on", "/autorun off"):
                 if user_input == "/autorun on" or (user_input == "/autorun" and not autorun):
                     autorun = True
+                    _save_autorun_default(autorun)
                     if RICH:
-                        console.print("  [yellow]Autorun ON[/yellow] — commands will execute without confirmation\n")
+                        console.print("  [yellow]Autorun ON[/yellow] — commands will execute without confirmation (saved)\n")
                     else:
-                        print("  Autorun ON — commands will execute without confirmation\n")
+                        print("  Autorun ON — commands will execute without confirmation (saved)\n")
                 else:
                     autorun = False
+                    _save_autorun_default(autorun)
                     if RICH:
-                        console.print("  [green]Autorun OFF[/green] — commands will prompt before running\n")
+                        console.print("  [green]Autorun OFF[/green] — commands will prompt before running (saved)\n")
                     else:
-                        print("  Autorun OFF — commands will prompt before running\n")
+                        print("  Autorun OFF — commands will prompt before running (saved)\n")
                 continue
 
             if user_input == "/keys":

@@ -301,12 +301,37 @@ def create_admin_user(username: str, password: str):
             print(f"ERROR: /home/{username} was not created.")
         raise SystemExit(1)
 
-    # Enable wheel-group sudo (Arch ships sudoers with this commented out).
+    # Enable wheel-group sudo (password required by default).
     sudoers_drop_in = f"{MOUNTPOINT}/etc/sudoers.d/10-wheel"
     os.makedirs(os.path.dirname(sudoers_drop_in), exist_ok=True)
     with open(sudoers_drop_in, "w") as f:
         f.write("%wheel ALL=(ALL:ALL) ALL\n")
     os.chmod(sudoers_drop_in, 0o440)
+
+    # Allow passwordless sudo only for package installation flows.
+    # Keep all other sudo commands password-protected.
+    pacman_install_nopasswd = f"{MOUNTPOINT}/etc/sudoers.d/11-wheel-pacman-install"
+    with open(pacman_install_nopasswd, "w") as f:
+        f.write(
+            "Cmnd_Alias PACMAN_INSTALL = "
+            "/usr/bin/pacman -S *, "
+            "/usr/bin/pacman -Sy *, "
+            "/usr/bin/pacman -Syu *, "
+            "/usr/bin/pacman -S --noconfirm *, "
+            "/usr/bin/pacman -Sy --noconfirm *, "
+            "/usr/bin/pacman -Syu --noconfirm *, "
+            "/usr/bin/pacman --noconfirm -S *, "
+            "/usr/bin/pacman --noconfirm -Sy *, "
+            "/usr/bin/pacman --noconfirm -Syu *, "
+            "/usr/bin/pacman --sync *, "
+            "/usr/bin/pacman --sync --noconfirm *, "
+            "/usr/bin/pacman --sync --refresh *, "
+            "/usr/bin/pacman --sync --refresh --noconfirm *, "
+            "/usr/bin/pacman --sync --refresh --sysupgrade *, "
+            "/usr/bin/pacman --sync --refresh --sysupgrade --noconfirm *\n"
+        )
+        f.write("%wheel ALL=(ALL:ALL) NOPASSWD: PACMAN_INSTALL\n")
+    os.chmod(pacman_install_nopasswd, 0o440)
 
     # PAM/GDM exclude root from GUI sessions, so the admin user is also the
     # account to use for any future graphical desktop installs.
