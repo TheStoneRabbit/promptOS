@@ -88,6 +88,11 @@ MODEL_ENV_BY_PROVIDER = {
     "groq": "PROMPTOS_GROQ_MODEL",
     "ollama": "PROMPTOS_OLLAMA_MODEL",
 }
+MODEL_CATALOG_HINTS = {
+    "openai": ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o"],
+    "claude": ["claude-sonnet-4-6", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
+    "groq": ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
+}
 SUDO_PREFIX_RE = re.compile(r"^\s*(?:/usr/bin/)?sudo\b\s*")
 INLINE_SUDO_RE = re.compile(r"(^|[;&|]\s*)((?:/usr/bin/)?sudo)\b(?!\s+-A)", re.IGNORECASE)
 
@@ -879,6 +884,11 @@ class PromptOSWindow(Adw.ApplicationWindow):
         if len(parts) == 2 and parts[1] == "show":
             self._show_current_models()
             return
+        # /llm-model list [provider]
+        if len(parts) >= 2 and parts[1] == "list":
+            provider = parts[2].lower() if len(parts) >= 3 else None
+            self._list_possible_models(provider)
+            return
         # /llm-model set ...
         if len(parts) >= 3 and parts[1] == "set":
             # /llm-model set <model>  (for active provider)
@@ -896,6 +906,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._add_assistant_message(
             "Usage:\n"
             "- /llm-model show\n"
+            "- /llm-model list [provider]\n"
             "- /llm-model set <provider> <model>\n"
             "- /llm-model set <model>"
         )
@@ -933,6 +944,52 @@ class PromptOSWindow(Adw.ApplicationWindow):
             )
             return
         self._add_assistant_message(f"Set `{provider_name}` model to `{model}`.")
+
+    def _list_possible_models(self, provider: str | None):
+        if provider and provider not in MODEL_ENV_BY_PROVIDER:
+            self._add_assistant_message("Unknown provider. Use one of: claude, openai, groq, ollama.")
+            return
+
+        targets = [provider] if provider else ["openai", "claude", "groq", "ollama"]
+        lines = ["Possible models by provider:"]
+        for p in targets:
+            if p == "ollama":
+                lines.append("- ollama:")
+                ollama_models = self._list_ollama_models()
+                if ollama_models:
+                    for m in ollama_models[:12]:
+                        lines.append(f"  - {m}")
+                else:
+                    lines.append("  - (no local models found; run `ollama list` / pull one)")
+                continue
+            hints = MODEL_CATALOG_HINTS.get(p, [])
+            lines.append(f"- {p}:")
+            for m in hints:
+                lines.append(f"  - {m}")
+            lines.append("  - (plus any model your API account has access to)")
+        self._add_assistant_message("\n".join(lines))
+
+    def _list_ollama_models(self) -> list[str]:
+        try:
+            proc = subprocess.run(
+                ["ollama", "list"],
+                text=True,
+                capture_output=True,
+                cwd=self.current_cwd,
+            )
+            if proc.returncode != 0:
+                return []
+            models = []
+            for line in (proc.stdout or "").splitlines()[1:]:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if parts:
+                    models.append(parts[0])
+            return models
+        except Exception:
+            return []
 
     def _on_autorun_toggled(self, switch: Gtk.Switch, _param):
         self.autorun_commands = switch.get_active()
@@ -1110,7 +1167,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
             day_key = dt.strftime("%Y-%m-%d")
             day_counts[day_key] = day_counts.get(day_key, 0) + 1
             session_idx = day_counts[day_key]
-            title = f"{dt.strftime('%B %-d, %Y')} session {session_idx}"
+            title = self._session_summary_from_file(entry)
+            if not title:
+                title = f"{dt.strftime('%B %-d, %Y')} session {session_idx}"
             row = Gtk.ListBoxRow()
             row.set_activatable(True)
             row.set_selectable(True)
@@ -1159,6 +1218,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
         return False
 
     def _default_session_name(self) -> str:
+        summary = self._session_summary_from_history()
+        if summary:
+            return summary
         return datetime.datetime.now().strftime("session-%Y%m%d-%H%M%S")
 
     def _safe_session_name(self, name: str) -> str:
@@ -1193,8 +1255,38 @@ class PromptOSWindow(Adw.ApplicationWindow):
             return
         lines = ["Saved sessions:"]
         for entry in entries[:30]:
-            lines.append(f"- {entry.stem}")
+            summary = self._session_summary_from_file(entry) or entry.stem
+            lines.append(f"- {summary} [{entry.stem}]")
         self._add_assistant_message("\n".join(lines))
+
+    def _session_summary_from_history(self) -> str:
+        for m in self.history:
+            if m.role != "user":
+                continue
+            text = " ".join(m.content.split()).strip()
+            if not text:
+                continue
+            if len(text) > 64:
+                text = text[:64].rstrip()
+            return text
+        return ""
+
+    def _session_summary_from_file(self, entry: Path) -> str:
+        try:
+            with open(entry) as f:
+                data = json.load(f)
+            for item in data:
+                if item.get("role") != "user":
+                    continue
+                text = " ".join(str(item.get("content", "")).split()).strip()
+                if not text:
+                    continue
+                if len(text) > 64:
+                    text = text[:64].rstrip()
+                return text
+        except Exception:
+            return ""
+        return ""
 
     def _forget_session(self, name: str):
         path = self._session_path(name)
