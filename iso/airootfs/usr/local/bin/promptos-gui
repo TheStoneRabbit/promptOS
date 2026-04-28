@@ -651,19 +651,10 @@ class PromptOSWindow(Adw.ApplicationWindow):
             return
 
         def _runner():
-            proc = subprocess.run(
-                command,
-                shell=True,
-                text=True,
-                capture_output=True,
-                cwd=self.current_cwd,
-            )
-            output = (proc.stdout or "") + (proc.stderr or "")
-            if len(output) > 6000:
-                output = output[:6000] + "\n...[truncated]..."
+            code, output = self._run_shell_command(command)
             if not output.strip():
                 output = "(no output)"
-            message = f"Exit {proc.returncode}\n```text\n{output}\n```"
+            message = f"Exit {code}\n```text\n{output}\n```"
             GLib.idle_add(self._finish_local_command, message)
 
         threading.Thread(target=_runner, daemon=True).start()
@@ -759,17 +750,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             return
 
         def _runner():
-            proc = subprocess.run(
-                command,
-                shell=True,
-                text=True,
-                capture_output=True,
-                cwd=self.current_cwd,
-            )
-            output = (proc.stdout or "") + (proc.stderr or "")
-            exit_code = proc.returncode
-            if len(output) > 6000:
-                output = output[:6000] + "\n...[truncated]..."
+            exit_code, output = self._run_shell_command(command)
             GLib.idle_add(self._on_card_finished, command, exit_code, output)
 
         threading.Thread(target=_runner, daemon=True).start()
@@ -949,6 +930,73 @@ class PromptOSWindow(Adw.ApplicationWindow):
     def _set_suggested_next(self, text: str):
         cleaned = " ".join((text or "").split())
         self._set_suggested_next_items([cleaned] if cleaned else [])
+
+    def _run_shell_command(self, command: str) -> tuple[int, str]:
+        needs_sudo = command.strip().startswith("sudo ")
+        stdin_data = None
+        effective_command = command
+        if needs_sudo:
+            password = self._prompt_sudo_password()
+            if password is None:
+                return 1, "sudo cancelled by user"
+            # -S reads password from stdin, -p '' suppresses prompt text.
+            effective_command = f"sudo -S -p '' {command.strip()[5:]}"
+            stdin_data = password + "\n"
+
+        proc = subprocess.run(
+            effective_command,
+            shell=True,
+            text=True,
+            capture_output=True,
+            cwd=self.current_cwd,
+            input=stdin_data,
+        )
+        output = (proc.stdout or "") + (proc.stderr or "")
+        if len(output) > 6000:
+            output = output[:6000] + "\n...[truncated]..."
+        return proc.returncode, output
+
+    def _prompt_sudo_password(self) -> str | None:
+        result: dict[str, str | None] = {"password": None}
+        done = threading.Event()
+
+        def _show_dialog():
+            dialog = Gtk.Dialog()
+            dialog.set_title("sudo authentication")
+            dialog.set_transient_for(self)
+            dialog.set_modal(True)
+            dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+            dialog.add_button("OK", Gtk.ResponseType.OK)
+            dialog.set_default_response(Gtk.ResponseType.OK)
+
+            box = dialog.get_content_area()
+            box.set_spacing(8)
+            box.set_margin_top(10)
+            box.set_margin_bottom(10)
+            box.set_margin_start(10)
+            box.set_margin_end(10)
+
+            label = Gtk.Label(label="Enter your password for sudo:", xalign=0)
+            entry = Gtk.Entry()
+            entry.set_visibility(False)
+            entry.set_invisible_char("*")
+            entry.set_activates_default(True)
+            box.append(label)
+            box.append(entry)
+
+            def _on_response(_dlg, response_id):
+                if response_id == Gtk.ResponseType.OK:
+                    result["password"] = entry.get_text()
+                dialog.close()
+                done.set()
+
+            dialog.connect("response", _on_response)
+            dialog.present()
+            return False
+
+        GLib.idle_add(_show_dialog)
+        done.wait()
+        return result["password"]
 
     def _set_suggested_next_items(self, items: list[str]):
         self.suggested_next_items = [i for i in items if i]
