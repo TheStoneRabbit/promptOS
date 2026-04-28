@@ -33,7 +33,7 @@ except ImportError:
 try:
     gi.require_version("Gtk", "4.0")
     gi.require_version("Adw", "1")
-    from gi.repository import Adw, GLib, Gtk
+    from gi.repository import Adw, GLib, Gtk, Pango
 except (ValueError, ImportError):
     print("promptos-gui requires gtk4 and libadwaita. Install: sudo pacman -S gtk4 libadwaita")
     raise SystemExit(1)
@@ -93,6 +93,7 @@ MODEL_CATALOG_HINTS = {
     "claude": ["claude-sonnet-4-6", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
     "groq": ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
 }
+DETACH_COMMANDS = {"firefox", "chromium", "google-chrome", "brave", "code", "nautilus", "thunar"}
 SUDO_PREFIX_RE = re.compile(r"^\s*(?:/usr/bin/)?sudo\b\s*")
 INLINE_SUDO_RE = re.compile(r"(^|[;&|]\s*)((?:/usr/bin/)?sudo)\b(?!\s+-A)", re.IGNORECASE)
 
@@ -342,6 +343,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._programmatic_scroll = False
         self._generation_seq = 0
         self._cancelled_generations: set[int] = set()
+        self._gui_exec_cache: set[str] | None = None
+        self.active_session_name: str | None = None
 
         self._load_env_config()
         self._install_css()
@@ -456,6 +459,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.session_search = Gtk.SearchEntry()
         self.session_search.set_placeholder_text("Search sessions...")
         self.session_search.connect("search-changed", self._on_session_search_changed)
+        self.session_search.set_margin_end(8)
         sidebar.append(self.session_search)
 
         self.sessions_list = Gtk.ListBox()
@@ -464,10 +468,12 @@ class PromptOSWindow(Adw.ApplicationWindow):
         sessions_scroll = Gtk.ScrolledWindow()
         sessions_scroll.set_vexpand(True)
         sessions_scroll.set_child(self.sessions_list)
+        sessions_scroll.set_margin_end(8)
         sidebar.append(sessions_scroll)
 
         refresh_btn = Gtk.Button(label="Refresh")
         refresh_btn.connect("clicked", lambda *_: self._refresh_sessions())
+        refresh_btn.set_margin_end(8)
         sidebar.append(refresh_btn)
 
         main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -566,6 +572,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         ]
         self.pending_cards.clear()
         self.current_assistant_bubble = None
+        self.active_session_name = None
         self._set_suggested_next("Ask about system status, logs, networking, or package updates.")
 
         child = self.chat_list.get_first_child()
@@ -749,7 +756,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             return
         if cmd.startswith("/save"):
             parts = cmd.split(" ", 1)
-            name = parts[1].strip() if len(parts) > 1 and parts[1].strip() else self._default_session_name()
+            name = parts[1].strip() if len(parts) > 1 and parts[1].strip() else ""
             self._save_current_session(name)
             return
         if cmd.startswith("/load"):
@@ -1189,6 +1196,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
             title_lbl = Gtk.Label(label=title, xalign=0)
             title_lbl.add_css_class("heading")
+            title_lbl.set_max_width_chars(28)
+            title_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            title_lbl.set_wrap(False)
             name_lbl = Gtk.Label(label=entry.stem, xalign=0)
             name_lbl.add_css_class("caption")
             name_lbl.add_css_class("monospace")
@@ -1209,6 +1219,11 @@ class PromptOSWindow(Adw.ApplicationWindow):
         try:
             with open(entry) as f:
                 data = json.load(f)
+            if isinstance(data, dict):
+                meta_title = str(data.get("title", "")).lower()
+                if query in meta_title:
+                    return True
+                data = data.get("messages", [])
             for item in data:
                 content = str(item.get("content", "")).lower()
                 if query in content:
@@ -1234,15 +1249,30 @@ class PromptOSWindow(Adw.ApplicationWindow):
         return sessions_dir / f"{self._safe_session_name(name)}.json"
 
     def _save_current_session(self, name: str):
+        explicit_name = bool(name and name.strip())
+        # If this chat was already saved and user didn't provide a new explicit name,
+        # overwrite the same session file.
+        if self.active_session_name and not explicit_name:
+            target_name = self.active_session_name
+        else:
+            title = self._generate_session_title()
+            target_name = (name.strip() if explicit_name else "") or title or self._default_session_name()
+
         path = self._session_path(name)
-        data = [{"role": m.role, "content": m.content} for m in self.history]
+        messages = [{"role": m.role, "content": m.content} for m in self.history]
+        data = {
+            "title": self._generate_session_title() or target_name,
+            "messages": messages,
+        }
         try:
+            path = self._session_path(target_name)
             with open(path, "w") as f:
                 json.dump(data, f, indent=2)
-            self._add_assistant_message(f"Saved session `{path.stem}` ({len(data)} messages).")
+            self.active_session_name = path.stem
+            self._add_assistant_message(f"Saved session `{path.stem}` ({len(messages)} messages).")
             self._refresh_sessions()
         except Exception as e:
-            self._add_assistant_message(f"Failed to save session `{name}`: {e}")
+            self._add_assistant_message(f"Failed to save session `{target_name}`: {e}")
 
     def _show_sessions(self):
         sessions_dir = Path.home() / ".promptsh" / "sessions"
@@ -1260,14 +1290,19 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._add_assistant_message("\n".join(lines))
 
     def _session_summary_from_history(self) -> str:
+        candidates: list[str] = []
         for m in self.history:
             if m.role != "user":
                 continue
             text = " ".join(m.content.split()).strip()
-            if not text:
+            if not text or text.startswith("/"):
                 continue
-            if len(text) > 64:
-                text = text[:64].rstrip()
+            candidates.append(text)
+        if candidates:
+            # Prefer a later message over the first prompt to better reflect the conversation.
+            text = candidates[-1]
+            if len(text) > 52:
+                text = text[:52].rstrip()
             return text
         return ""
 
@@ -1275,18 +1310,55 @@ class PromptOSWindow(Adw.ApplicationWindow):
         try:
             with open(entry) as f:
                 data = json.load(f)
+            if isinstance(data, dict):
+                title = " ".join(str(data.get("title", "")).split()).strip()
+                if title:
+                    return title[:52].rstrip()
+                data = data.get("messages", [])
+            candidates: list[str] = []
             for item in data:
                 if item.get("role") != "user":
                     continue
                 text = " ".join(str(item.get("content", "")).split()).strip()
-                if not text:
+                if not text or text.startswith("/"):
                     continue
-                if len(text) > 64:
-                    text = text[:64].rstrip()
+                candidates.append(text)
+            if candidates:
+                text = candidates[-1]
+                if len(text) > 52:
+                    text = text[:52].rstrip()
                 return text
         except Exception:
             return ""
         return ""
+
+    def _generate_session_title(self) -> str:
+        # Try model-based summary title first; fallback to heuristic.
+        fallback = self._session_summary_from_history()
+        if not self.active_provider:
+            return fallback
+        convo_lines = []
+        for m in self.history[-12:]:
+            if m.role == "system":
+                continue
+            convo_lines.append(f"{m.role}: {m.content}")
+        if not convo_lines:
+            return fallback
+        prompt = (
+            "Create a concise session title (4-8 words) summarizing this conversation. "
+            "No quotes, no punctuation suffix, plain text only.\n\n"
+            + "\n".join(convo_lines)
+        )
+        try:
+            resp = "".join(self.active_provider.chat([Message("user", prompt)], stream=False)).strip()
+            title = " ".join(resp.split()).strip().strip('"').strip("'")
+            if not title:
+                return fallback
+            if len(title) > 52:
+                title = title[:52].rstrip()
+            return title
+        except Exception:
+            return fallback
 
     def _forget_session(self, name: str):
         path = self._session_path(name)
@@ -1340,6 +1412,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.history = loaded
         self.pending_cards.clear()
         self.current_assistant_bubble = None
+        self.active_session_name = name
         self._clear_chat_view()
 
         for msg in self.history:
@@ -1432,6 +1505,11 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._set_suggested_next_items([cleaned] if cleaned else [])
 
     def _run_shell_command(self, command: str) -> tuple[int, str]:
+        # Detach common GUI launch commands so they don't block the queue.
+        detached = self._maybe_detach_gui_command(command)
+        if detached is not None:
+            return 0, detached
+
         needs_sudo = self._has_explicit_sudo(command)
         has_inline_sudo = self._has_inline_sudo(command)
         askpass_path = None
@@ -1501,6 +1579,82 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 output = output[:6000] + "\n...[truncated]..."
             return retry.returncode, output
         return proc.returncode, output
+
+    def _maybe_detach_gui_command(self, command: str) -> str | None:
+        cmd = (command or "").strip()
+        if not cmd:
+            return None
+        if self._has_explicit_sudo(cmd) or self._has_inline_sudo(cmd):
+            return None
+        if any(op in cmd for op in ("&&", "||", ";", "|")):
+            return None
+        try:
+            parts = shlex.split(cmd)
+        except ValueError:
+            return None
+        if not parts:
+            return None
+        if not self._is_probably_gui_exec(parts[0]):
+            return None
+        try:
+            subprocess.Popen(
+                parts,
+                cwd=self.current_cwd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return f"Launched in background: {' '.join(parts)}"
+        except Exception as e:
+            return f"Failed to launch in background: {e}"
+
+    def _is_probably_gui_exec(self, exe_name: str) -> bool:
+        if exe_name in DETACH_COMMANDS:
+            return True
+        if self._gui_exec_cache is None:
+            self._gui_exec_cache = self._load_gui_exec_cache()
+        return exe_name in self._gui_exec_cache
+
+    def _load_gui_exec_cache(self) -> set[str]:
+        names: set[str] = set(DETACH_COMMANDS)
+        app_dirs = [Path("/usr/share/applications"), Path.home() / ".local/share/applications"]
+        for d in app_dirs:
+            if not d.exists():
+                continue
+            for desktop in d.glob("*.desktop"):
+                try:
+                    exec_line = ""
+                    no_display = False
+                    terminal = False
+                    with open(desktop) as f:
+                        for raw in f:
+                            line = raw.strip()
+                            if line.startswith("NoDisplay=") and line.split("=", 1)[1].strip().lower() == "true":
+                                no_display = True
+                            elif line.startswith("Terminal=") and line.split("=", 1)[1].strip().lower() == "true":
+                                terminal = True
+                            elif line.startswith("Exec=") and not exec_line:
+                                exec_line = line.split("=", 1)[1].strip()
+                    if no_display or terminal or not exec_line:
+                        continue
+                    parts = shlex.split(exec_line)
+                    if not parts:
+                        continue
+                    cmd = parts[0]
+                    # Strip env wrappers like "env FOO=bar app %u".
+                    if cmd == "env":
+                        for tok in parts[1:]:
+                            if "=" in tok:
+                                continue
+                            cmd = tok
+                            break
+                    cmd = os.path.basename(cmd)
+                    if cmd:
+                        names.add(cmd)
+                except Exception:
+                    continue
+        return names
 
     def _has_explicit_sudo(self, command: str) -> bool:
         return bool(SUDO_PREFIX_RE.match(command or ""))
