@@ -75,6 +75,19 @@ frame.user-bubble > border {
 frame.user-bubble label {
   color: #ffffff;
 }
+scrolledwindow.composer-input {
+  background-color: rgba(245, 247, 252, 0.92);
+  border-radius: 12px;
+  border: 1px solid rgba(180, 188, 204, 0.9);
+}
+scrolledwindow.composer-input > viewport {
+  background-color: transparent;
+  border-radius: 12px;
+}
+textview.composer-input-view {
+  background-color: transparent;
+  color: #0f172a;
+}
 """
 
 GUI_AGENT_MD = "/usr/local/lib/promptos/AGENT_GUI.md"
@@ -556,11 +569,13 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.entry_key_controller.connect("key-pressed", self._on_entry_key_pressed)
         self.entry.add_controller(self.entry_key_controller)
         entry_scroll = Gtk.ScrolledWindow()
+        entry_scroll.add_css_class("composer-input")
         entry_scroll.set_hexpand(True)
         entry_scroll.set_min_content_height(82)
         entry_scroll.set_max_content_height(160)
         entry_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         entry_scroll.set_child(self.entry)
+        self.entry.add_css_class("composer-input-view")
 
         send = Gtk.Button(label="Send")
         send.add_css_class("suggested-action")
