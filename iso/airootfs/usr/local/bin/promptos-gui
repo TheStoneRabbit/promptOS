@@ -385,7 +385,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
         )
 
     def _load_env_config(self):
-        for path in ("/etc/promptos/config", "/etc/promptos/keys"):
+        # Load keys first, then config so config is authoritative for runtime
+        # settings such as provider/model selection.
+        for path in ("/etc/promptos/keys", "/etc/promptos/config"):
             if not os.path.exists(path):
                 continue
             with open(path) as f:
@@ -427,6 +429,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.provider_badge = Gtk.Label(label=f"Provider: {provider_name}")
         self.provider_badge.add_css_class("pill")
         topbar.append(self.provider_badge)
+        topbar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
 
         autorun_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         autorun_label = Gtk.Label(label="Autorun CMD")
