@@ -175,19 +175,34 @@ class PromptOSWindow(Adw.ApplicationWindow):
         if self.active_provider:
             provider_name = self.active_provider.name
 
-        header = Adw.HeaderBar()
-        self.set_titlebar(header)
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.set_content(page)
+
+        topbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        topbar.set_margin_top(10)
+        topbar.set_margin_bottom(8)
+        topbar.set_margin_start(12)
+        topbar.set_margin_end(12)
+        page.append(topbar)
+
+        title = Gtk.Label(label="promptOS", xalign=0)
+        title.add_css_class("title-2")
+        topbar.append(title)
+
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        topbar.append(spacer)
 
         self.provider_badge = Gtk.Label(label=f"Provider: {provider_name}")
         self.provider_badge.add_css_class("pill")
-        header.pack_start(self.provider_badge)
+        topbar.append(self.provider_badge)
 
         new_btn = Gtk.Button(label="New Chat")
         new_btn.connect("clicked", lambda *_: self._new_chat())
-        header.pack_end(new_btn)
+        topbar.append(new_btn)
 
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self.set_content(root)
+        page.append(root)
 
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         sidebar.set_size_request(300, -1)
