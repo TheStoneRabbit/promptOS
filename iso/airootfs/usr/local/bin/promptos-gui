@@ -737,8 +737,11 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
     def _normalize_command(self, text: str) -> str:
         cmd = text.strip().strip("`").strip()
-        # Remove accidental trailing quote artifacts from model output.
-        while cmd and cmd[-1] in ("'", '"'):
+        # Remove accidental unmatched trailing quote artifacts from model output,
+        # while preserving valid balanced quoted commands.
+        if cmd.endswith("'") and cmd.count("'") % 2 == 1:
+            cmd = cmd[:-1].rstrip()
+        if cmd.endswith('"') and cmd.count('"') % 2 == 1:
             cmd = cmd[:-1].rstrip()
         return cmd
 
