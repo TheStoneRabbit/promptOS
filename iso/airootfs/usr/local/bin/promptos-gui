@@ -761,7 +761,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             del self.pending_cards[command]
         summary = f"Command `{command}` finished with exit {code}."
         if output.strip():
-            summary += f"\n\n{output}"
+            summary += f"\n\n```text\n{output}\n```"
         self._add_assistant_message(summary)
         self._request_suggested_next_async()
         return False
