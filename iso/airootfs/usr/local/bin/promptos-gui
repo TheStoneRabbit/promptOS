@@ -1255,7 +1255,13 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
     def _should_retry_with_sudo(self, command: str, output: str) -> bool:
         text = (output or "").lower()
-        if "permission denied" in text or "must be root" in text or "are you root" in text:
+        if (
+            "permission denied" in text
+            or "must be root" in text
+            or "are you root" in text
+            or "a terminal is required to read the password" in text
+            or "no tty present and no askpass program specified" in text
+        ):
             return True
         try:
             parts = shlex.split(command)
