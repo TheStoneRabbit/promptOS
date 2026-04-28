@@ -40,7 +40,16 @@ from providers import Message, get_provider, list_providers
 
 
 CMD_RE = re.compile(r"^\s*CMD:\s*(.+?)\s*$", re.MULTILINE)
-FENCED_CODE_RE = re.compile(r"```(?:[a-zA-Z0-9_+-]+)?\n(.*?)```", re.DOTALL)
+FENCED_CODE_RE = re.compile(r"```([a-zA-Z0-9_+-]+)?\n(.*?)```", re.DOTALL)
+
+APP_CSS = b"""
+textview.code-block-view text {
+  color: #d8dee9;
+}
+textview.output-block text {
+  color: #9ad97d;
+}
+"""
 
 
 class ChatBubble(Gtk.Box):
@@ -113,7 +122,7 @@ class ChatBubble(Gtk.Box):
         block.append(copy_btn)
         self.inner.append(block)
 
-    def _add_code_block(self, code: str):
+    def _add_code_block(self, code: str, lang: str | None = None):
         frame = Gtk.Frame()
         frame.add_css_class("code-block")
 
@@ -128,6 +137,10 @@ class ChatBubble(Gtk.Box):
         tv.set_cursor_visible(False)
         tv.set_monospace(True)
         tv.set_wrap_mode(Gtk.WrapMode.CHAR)
+        if (lang or "").lower() in ("text", "console", "log", "output", "stdout", "stderr"):
+            tv.add_css_class("output-block")
+        else:
+            tv.add_css_class("code-block-view")
         tv.get_buffer().set_text(code.rstrip("\n"))
         box.append(tv)
         copy_btn = Gtk.Button(label="Copy")
@@ -153,7 +166,7 @@ class ChatBubble(Gtk.Box):
         for match in FENCED_CODE_RE.finditer(text):
             start, end = match.span()
             self._add_text_block(text[idx:start])
-            self._add_code_block(match.group(1))
+            self._add_code_block(match.group(2), match.group(1))
             idx = end
         self._add_text_block(text[idx:])
 
@@ -215,10 +228,21 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.current_assistant_bubble: ChatBubble | None = None
 
         self._load_env_config()
+        self._install_css()
         self._build_ui()
         self._load_provider()
         self._new_chat()
         self._refresh_sessions()
+
+    def _install_css(self):
+        display = self.get_display()
+        if not display:
+            return
+        provider = Gtk.CssProvider()
+        provider.load_from_data(APP_CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
 
     def _load_env_config(self):
         for path in ("/etc/promptos/config", "/etc/promptos/keys"):
