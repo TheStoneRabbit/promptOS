@@ -1202,16 +1202,25 @@ class PromptOSWindow(Adw.ApplicationWindow):
             box.set_margin_start(8)
             box.set_margin_end(8)
 
+            header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             title_lbl = Gtk.Label(label=title, xalign=0)
             title_lbl.add_css_class("heading")
             title_lbl.set_max_width_chars(28)
             title_lbl.set_ellipsize(Pango.EllipsizeMode.END)
             title_lbl.set_wrap(False)
+            title_lbl.set_hexpand(True)
+            delete_btn = Gtk.Button(label="X")
+            delete_btn.add_css_class("flat")
+            delete_btn.set_tooltip_text("Delete session")
+            delete_btn.set_halign(Gtk.Align.END)
+            delete_btn.connect("clicked", lambda _, n=entry.stem: self._delete_session_and_refresh(n))
+            header.append(title_lbl)
+            header.append(delete_btn)
             name_lbl = Gtk.Label(label=entry.stem, xalign=0)
             name_lbl.add_css_class("caption")
             name_lbl.add_css_class("monospace")
 
-            box.append(title_lbl)
+            box.append(header)
             box.append(name_lbl)
             frame.set_child(box)
             row.set_child(frame)
@@ -1347,9 +1356,13 @@ class PromptOSWindow(Adw.ApplicationWindow):
             return fallback
         convo_lines = []
         for m in self.history[-12:]:
-            if m.role == "system":
+            if m.role != "user":
                 continue
-            convo_lines.append(f"{m.role}: {m.content}")
+            content = (m.content or "").strip()
+            # Skip synthetic feedback injected by the GUI runtime.
+            if content.startswith("[command results]"):
+                continue
+            convo_lines.append(f"user: {content}")
         if not convo_lines:
             return fallback
         prompt = (
@@ -1380,6 +1393,18 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 self._add_assistant_message(f"Failed to delete session `{name}`: {e}")
                 return
         self._add_assistant_message(f"Session `{name}` not found.")
+
+    def _delete_session_and_refresh(self, name: str):
+        # Silent delete from sidebar control (no extra chat message spam).
+        path = self._session_path(name)
+        if path.exists():
+            try:
+                path.unlink()
+                if self.active_session_name == name:
+                    self.active_session_name = None
+            except Exception:
+                pass
+        self._refresh_sessions()
 
     def _on_session_row_activated(self, _listbox: Gtk.ListBox, row: Gtk.ListBoxRow):
         name = row.get_name()
