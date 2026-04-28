@@ -326,6 +326,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.suggested_next_items: list[str] = []
         self.suggest_request_seq = 0
         self.current_cwd = os.getcwd()
+        self.session_search_text = ""
 
         self._load_env_config()
         self._install_css()
@@ -436,6 +437,11 @@ class PromptOSWindow(Adw.ApplicationWindow):
         side_title = Gtk.Label(label="Recent Sessions", xalign=0)
         side_title.add_css_class("heading")
         sidebar.append(side_title)
+
+        self.session_search = Gtk.SearchEntry()
+        self.session_search.set_placeholder_text("Search sessions...")
+        self.session_search.connect("search-changed", self._on_session_search_changed)
+        sidebar.append(self.session_search)
 
         self.sessions_list = Gtk.ListBox()
         self.sessions_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
@@ -594,6 +600,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
     def _set_input_enabled(self, enabled: bool):
         self.entry.set_sensitive(enabled)
         self.send_btn.set_sensitive(enabled)
+        if enabled:
+            self.entry.grab_focus()
 
     def _submit(self):
         text = self.entry.get_text().strip()
@@ -961,15 +969,66 @@ class PromptOSWindow(Adw.ApplicationWindow):
             self.sessions_list.append(Gtk.Label(label="No saved sessions", xalign=0))
             return
 
-        for entry in entries[:30]:
+        entries = entries[:80]
+        if self.session_search_text:
+            entries = [e for e in entries if self._session_matches_query(e, self.session_search_text)]
+        if not entries:
+            self.sessions_list.append(Gtk.Label(label="No matching sessions", xalign=0))
+            return
+
+        day_counts: dict[str, int] = {}
+        for entry in entries:
+            dt = datetime.datetime.fromtimestamp(entry.stat().st_mtime)
+            day_key = dt.strftime("%Y-%m-%d")
+            day_counts[day_key] = day_counts.get(day_key, 0) + 1
+            session_idx = day_counts[day_key]
+            title = f"{dt.strftime('%B %-d, %Y')} session {session_idx}"
             row = Gtk.ListBoxRow()
             row.set_activatable(True)
             row.set_selectable(True)
             row.set_name(entry.stem)
-            lbl = Gtk.Label(label=entry.stem, xalign=0)
-            lbl.add_css_class("monospace")
-            row.set_child(lbl)
+
+            frame = Gtk.Frame()
+            frame.set_margin_top(4)
+            frame.set_margin_bottom(4)
+            frame.set_margin_start(2)
+            frame.set_margin_end(2)
+
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            box.set_margin_top(8)
+            box.set_margin_bottom(8)
+            box.set_margin_start(8)
+            box.set_margin_end(8)
+
+            title_lbl = Gtk.Label(label=title, xalign=0)
+            title_lbl.add_css_class("heading")
+            name_lbl = Gtk.Label(label=entry.stem, xalign=0)
+            name_lbl.add_css_class("caption")
+            name_lbl.add_css_class("monospace")
+
+            box.append(title_lbl)
+            box.append(name_lbl)
+            frame.set_child(box)
+            row.set_child(frame)
             self.sessions_list.append(row)
+
+    def _on_session_search_changed(self, entry: Gtk.SearchEntry):
+        self.session_search_text = entry.get_text().strip().lower()
+        self._refresh_sessions()
+
+    def _session_matches_query(self, entry: Path, query: str) -> bool:
+        if query in entry.stem.lower():
+            return True
+        try:
+            with open(entry) as f:
+                data = json.load(f)
+            for item in data:
+                content = str(item.get("content", "")).lower()
+                if query in content:
+                    return True
+        except Exception:
+            return False
+        return False
 
     def _default_session_name(self) -> str:
         return datetime.datetime.now().strftime("session-%Y%m%d-%H%M%S")
