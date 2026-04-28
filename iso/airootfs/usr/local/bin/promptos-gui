@@ -322,6 +322,7 @@ class CommandCard(Gtk.Frame):
 
     def set_run_as_default(self, window: Gtk.Window):
         self.run_btn.set_can_default(True)
+        self.run_btn.grab_focus()
         self.run_btn.grab_default()
         window.set_default_widget(self.run_btn)
 
@@ -1014,10 +1015,10 @@ class PromptOSWindow(Adw.ApplicationWindow):
             card = CommandCard(command, self._run_command_card, self._skip_command_card)
             self.pending_cards[command] = card
             self.cmd_cards_box.append(card)
-            if not self.autorun_commands:
-                card.set_run_as_default(self)
             if self.autorun_commands:
                 self._run_command_card(command)
+        if not self.autorun_commands:
+            self._focus_run_on_next_pending_card()
 
     def _extract_suggested_commands(self, text: str) -> list[str]:
         cmds: list[str] = []
@@ -1101,6 +1102,10 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.command_queue = [c for c in self.command_queue if c != command]
         self.cmd_cards_box.remove(card)
         del self.pending_cards[command]
+        if not self.autorun_commands:
+            self._focus_run_on_next_pending_card()
+            if not self.pending_cards:
+                self.entry.grab_focus()
 
     def _on_card_finished(self, command: str, code: int, output: str):
         self.command_running = False
@@ -1115,7 +1120,25 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._request_command_followup_async(command, code, output)
         self._request_suggested_next_async()
         self._start_next_queued_command()
+        if not self.autorun_commands:
+            self._focus_run_on_next_pending_card()
+            if not self.pending_cards:
+                self.entry.grab_focus()
         return False
+
+    def _focus_run_on_next_pending_card(self):
+        if not self.pending_cards:
+            self.entry.grab_focus()
+            return
+        # Focus first pending card not currently queued/running first.
+        for command, card in self.pending_cards.items():
+            if command not in self.command_queue and command != "":
+                card.set_run_as_default(self)
+                return
+        # Fallback: any pending card.
+        for _, card in self.pending_cards.items():
+            card.set_run_as_default(self)
+            return
 
     def _request_command_followup_async(self, command: str, code: int, output: str):
         if not self.active_provider:
