@@ -120,7 +120,7 @@ class ChatBubble(Gtk.Box):
         tv.set_editable(False)
         tv.set_cursor_visible(False)
         tv.set_monospace(True)
-        tv.set_wrap_mode(Gtk.WrapMode.NONE)
+        tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         tv.get_buffer().set_text(code.rstrip("\n"))
         box.append(tv)
 
