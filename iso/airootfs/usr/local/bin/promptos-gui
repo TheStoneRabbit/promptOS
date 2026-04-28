@@ -21,6 +21,7 @@ import shlex
 import getpass
 import time
 import tempfile
+import datetime
 from pathlib import Path
 
 try:
@@ -636,12 +637,110 @@ class PromptOSWindow(Adw.ApplicationWindow):
     def _handle_slash_command(self, text: str):
         self._add_user_message(text)
         cmd = text.strip()
+        if cmd == "/help":
+            self._add_assistant_message(
+                "Commands:\n"
+                "- /help\n"
+                "- /clear\n"
+                "- /history\n"
+                "- /providers\n"
+                "- /switch <provider>\n"
+                "- /save [name]\n"
+                "- /load <name>\n"
+                "- /sessions\n"
+                "- /forget <name>\n"
+                "- /keys\n"
+                "- /keysetup\n"
+                "- /wifi\n"
+                "- /model [status|pull|ensure]\n"
+                "- /autorun [on|off]\n"
+                "- /install"
+            )
+            return
+        if cmd == "/clear":
+            self._new_chat()
+            self._add_assistant_message("Conversation cleared.")
+            return
+        if cmd == "/history":
+            lines = []
+            for m in self.history:
+                if m.role == "system":
+                    continue
+                lines.append(f"[{m.role}] {m.content}")
+            self._add_assistant_message("\n\n".join(lines) if lines else "No conversation history.")
+            return
+        if cmd.startswith("/switch"):
+            parts = cmd.split(" ", 1)
+            if len(parts) < 2 or not parts[1].strip():
+                self._add_assistant_message("Usage: /switch <claude|openai|groq|ollama>")
+                return
+            name = parts[1].strip()
+            try:
+                p = get_provider(name)
+            except Exception as e:
+                self._add_assistant_message(f"Switch failed: {e}")
+                return
+            if not p:
+                self._add_assistant_message(f"Provider `{name}` unavailable.")
+                return
+            self.active_provider = p
+            self._refresh_provider_badge()
+            self._refresh_system_message()
+            self._add_assistant_message(f"Switched provider to `{name}`.")
+            return
+        if cmd.startswith("/save"):
+            parts = cmd.split(" ", 1)
+            name = parts[1].strip() if len(parts) > 1 and parts[1].strip() else self._default_session_name()
+            self._save_current_session(name)
+            return
+        if cmd.startswith("/load"):
+            parts = cmd.split(" ", 1)
+            if len(parts) < 2 or not parts[1].strip():
+                self._add_assistant_message("Usage: /load <session-name>")
+                return
+            self._load_session(parts[1].strip())
+            return
+        if cmd == "/sessions":
+            self._show_sessions()
+            return
+        if cmd.startswith("/forget"):
+            parts = cmd.split(" ", 1)
+            if len(parts) < 2 or not parts[1].strip():
+                self._add_assistant_message("Usage: /forget <session-name>")
+                return
+            self._forget_session(parts[1].strip())
+            return
+        if cmd == "/keys":
+            self._run_local_command("promptos-keys show")
+            return
+        if cmd == "/keysetup":
+            self._run_local_command("promptos-keys setup")
+            return
         if cmd == "/providers":
             lines = []
             for p in list_providers():
                 status = "available" if p["available"] else "unavailable"
                 lines.append(f"- {p['name']}: {status}")
             self._add_assistant_message("Providers:\n" + "\n".join(lines))
+            return
+        if cmd.startswith("/autorun"):
+            parts = cmd.split(" ", 1)
+            if len(parts) == 1:
+                self.autorun_commands = not self.autorun_commands
+            else:
+                v = parts[1].strip().lower()
+                if v in ("on", "true", "1", "yes"):
+                    self.autorun_commands = True
+                elif v in ("off", "false", "0", "no"):
+                    self.autorun_commands = False
+                else:
+                    self._add_assistant_message("Usage: /autorun [on|off]")
+                    return
+            self.autorun_switch.set_active(self.autorun_commands)
+            self._add_assistant_message(f"Autorun {'ON' if self.autorun_commands else 'OFF'}.")
+            return
+        if cmd == "/install":
+            self._run_local_command("promptos-install")
             return
         if cmd == "/wifi":
             self._run_local_command("promptos-wifi")
@@ -650,9 +749,6 @@ class PromptOSWindow(Adw.ApplicationWindow):
             tail = cmd.split(" ", 1)
             model_cmd = "promptos-model status" if len(tail) == 1 else f"promptos-model {tail[1]}"
             self._run_local_command(model_cmd)
-            return
-        if cmd == "/help":
-            self._add_assistant_message("Local commands: /providers, /model [status|pull|ensure], /wifi")
             return
         self._add_assistant_message(f"Unknown local command: {cmd}")
 
@@ -874,6 +970,57 @@ class PromptOSWindow(Adw.ApplicationWindow):
             lbl.add_css_class("monospace")
             row.set_child(lbl)
             self.sessions_list.append(row)
+
+    def _default_session_name(self) -> str:
+        return datetime.datetime.now().strftime("session-%Y%m%d-%H%M%S")
+
+    def _safe_session_name(self, name: str) -> str:
+        keep = "_-."
+        out = "".join(c if (c.isalnum() or c in keep) else "_" for c in name).strip("_")
+        return out or self._default_session_name()
+
+    def _session_path(self, name: str) -> Path:
+        sessions_dir = Path.home() / ".promptsh" / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        return sessions_dir / f"{self._safe_session_name(name)}.json"
+
+    def _save_current_session(self, name: str):
+        path = self._session_path(name)
+        data = [{"role": m.role, "content": m.content} for m in self.history]
+        try:
+            with open(path, "w") as f:
+                json.dump(data, f, indent=2)
+            self._add_assistant_message(f"Saved session `{path.stem}` ({len(data)} messages).")
+            self._refresh_sessions()
+        except Exception as e:
+            self._add_assistant_message(f"Failed to save session `{name}`: {e}")
+
+    def _show_sessions(self):
+        sessions_dir = Path.home() / ".promptsh" / "sessions"
+        if not sessions_dir.exists():
+            self._add_assistant_message("No saved sessions.")
+            return
+        entries = sorted(sessions_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not entries:
+            self._add_assistant_message("No saved sessions.")
+            return
+        lines = ["Saved sessions:"]
+        for entry in entries[:30]:
+            lines.append(f"- {entry.stem}")
+        self._add_assistant_message("\n".join(lines))
+
+    def _forget_session(self, name: str):
+        path = self._session_path(name)
+        if path.exists():
+            try:
+                path.unlink()
+                self._add_assistant_message(f"Deleted session `{path.stem}`.")
+                self._refresh_sessions()
+                return
+            except Exception as e:
+                self._add_assistant_message(f"Failed to delete session `{name}`: {e}")
+                return
+        self._add_assistant_message(f"Session `{name}` not found.")
 
     def _on_session_row_activated(self, _listbox: Gtk.ListBox, row: Gtk.ListBoxRow):
         name = row.get_name()
