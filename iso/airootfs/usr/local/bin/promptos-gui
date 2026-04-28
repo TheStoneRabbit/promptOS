@@ -39,6 +39,7 @@ from providers import Message, get_provider, list_providers
 
 
 CMD_RE = re.compile(r"^\s*CMD:\s*(.+?)\s*$", re.MULTILINE)
+FENCED_CODE_RE = re.compile(r"```(?:[a-zA-Z0-9_+-]+)?\n(.*?)```", re.DOTALL)
 
 
 class ChatBubble(Gtk.Box):
@@ -73,13 +74,8 @@ class ChatBubble(Gtk.Box):
         inner.set_margin_start(14)
         inner.set_margin_end(14)
 
-        self.label = Gtk.Label(xalign=0)
-        self.label.set_wrap(True)
-        self.label.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        self.label.set_selectable(True)
-        self.label.set_max_width_chars(95)
-        self.label.set_text(text)
-        inner.append(self.label)
+        self.inner = inner
+        self._set_rich_text(text)
 
         frame.set_child(inner)
         rail.append(frame)
@@ -90,7 +86,60 @@ class ChatBubble(Gtk.Box):
             rail.append(spacer)
 
     def set_text(self, text: str):
-        self.label.set_text(text)
+        self._set_rich_text(text)
+
+    def _clear_inner(self):
+        child = self.inner.get_first_child()
+        while child:
+            nxt = child.get_next_sibling()
+            self.inner.remove(child)
+            child = nxt
+
+    def _add_text_block(self, text: str):
+        if not text:
+            return
+        label = Gtk.Label(xalign=0)
+        label.set_wrap(True)
+        label.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        label.set_selectable(True)
+        label.set_max_width_chars(95)
+        label.set_text(text)
+        self.inner.append(label)
+
+    def _add_code_block(self, code: str):
+        frame = Gtk.Frame()
+        frame.add_css_class("code-block")
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.set_margin_start(8)
+        box.set_margin_end(8)
+
+        tv = Gtk.TextView()
+        tv.set_editable(False)
+        tv.set_cursor_visible(False)
+        tv.set_monospace(True)
+        tv.set_wrap_mode(Gtk.WrapMode.NONE)
+        tv.get_buffer().set_text(code.rstrip("\n"))
+        box.append(tv)
+
+        frame.set_child(box)
+        self.inner.append(frame)
+
+    def _set_rich_text(self, text: str):
+        self._clear_inner()
+        if self.role != "assistant" or "```" not in text:
+            self._add_text_block(text)
+            return
+
+        idx = 0
+        for match in FENCED_CODE_RE.finditer(text):
+            start, end = match.span()
+            self._add_text_block(text[idx:start])
+            self._add_code_block(match.group(1))
+            idx = end
+        self._add_text_block(text[idx:])
 
 
 class CommandCard(Gtk.Frame):
@@ -359,6 +408,10 @@ class PromptOSWindow(Adw.ApplicationWindow):
             return
         self.entry.set_text("")
 
+        if text.startswith("/"):
+            self._handle_slash_command(text)
+            return
+
         if not self.active_provider:
             self._add_assistant_message("No AI provider available. Configure keys or run local ollama.")
             return
@@ -386,6 +439,50 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 GLib.idle_add(self._finalize_response, f"Provider error: {e}")
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _handle_slash_command(self, text: str):
+        self._add_user_message(text)
+        cmd = text.strip()
+        if cmd == "/providers":
+            lines = []
+            for p in list_providers():
+                status = "available" if p["available"] else "unavailable"
+                lines.append(f"- {p['name']}: {status}")
+            self._add_assistant_message("Providers:\n" + "\n".join(lines))
+            return
+        if cmd == "/wifi":
+            self._run_local_command("promptos-wifi")
+            return
+        if cmd.startswith("/model"):
+            tail = cmd.split(" ", 1)
+            model_cmd = "promptos-model status" if len(tail) == 1 else f"promptos-model {tail[1]}"
+            self._run_local_command(model_cmd)
+            return
+        if cmd == "/help":
+            self._add_assistant_message("Local commands: /providers, /model [status|pull|ensure], /wifi")
+            return
+        self._add_assistant_message(f"Unknown local command: {cmd}")
+
+    def _run_local_command(self, command: str):
+        self._add_assistant_message(f"Running:\n```bash\n{command}\n```")
+        self._set_input_enabled(False)
+
+        def _runner():
+            proc = subprocess.run(command, shell=True, text=True, capture_output=True)
+            output = (proc.stdout or "") + (proc.stderr or "")
+            if len(output) > 6000:
+                output = output[:6000] + "\n...[truncated]..."
+            if not output.strip():
+                output = "(no output)"
+            message = f"Exit {proc.returncode}\n```text\n{output}\n```"
+            GLib.idle_add(self._finish_local_command, message)
+
+        threading.Thread(target=_runner, daemon=True).start()
+
+    def _finish_local_command(self, message: str):
+        self._add_assistant_message(message)
+        self._set_input_enabled(True)
+        return False
 
     def _update_streaming_bubble(self, text: str):
         if self.current_assistant_bubble:
@@ -438,8 +535,10 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
     def _skip_command_card(self, command: str):
         card = self.pending_cards.get(command)
-        if card:
-            card.set_state("Dismissed")
+        if not card:
+            return
+        self.cmd_cards_box.remove(card)
+        del self.pending_cards[command]
 
     def _on_card_finished(self, command: str, code: int, output: str):
         card = self.pending_cards.get(command)
