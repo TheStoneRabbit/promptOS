@@ -76,9 +76,9 @@ frame.user-bubble label {
   color: #ffffff;
 }
 scrolledwindow.composer-input {
-  background-color: rgba(245, 247, 252, 0.92);
+  background-color: rgba(75, 85, 99, 0.28);
   border-radius: 12px;
-  border: 1px solid rgba(180, 188, 204, 0.9);
+  border: 1px solid rgba(107, 114, 128, 0.75);
 }
 scrolledwindow.composer-input > viewport {
   background-color: transparent;
@@ -86,7 +86,7 @@ scrolledwindow.composer-input > viewport {
 }
 textview.composer-input-view {
   background-color: transparent;
-  color: #0f172a;
+  color: #e5e7eb;
 }
 """
 
