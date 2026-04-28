@@ -20,6 +20,7 @@ import json
 import shlex
 import getpass
 import time
+import tempfile
 from pathlib import Path
 
 try:
@@ -80,6 +81,8 @@ GUI_AGENT_FALLBACK = (
     "You are promptOS assistant. Be concise, practical, and safe. "
     "Use CMD: only for commands that should be user-approved."
 )
+SUDO_PREFIX_RE = re.compile(r"^\s*(?:/usr/bin/)?sudo\b\s*")
+INLINE_SUDO_RE = re.compile(r"(^|[;&|]\s*)((?:/usr/bin/)?sudo)\b(?!\s+-A)", re.IGNORECASE)
 
 
 class ChatBubble(Gtk.Box):
@@ -1004,44 +1007,69 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
     def _run_shell_command(self, command: str) -> tuple[int, str]:
         needs_sudo = self._has_explicit_sudo(command)
-        stdin_data = None
-        effective_command = command
-        if needs_sudo:
+        has_inline_sudo = self._has_inline_sudo(command)
+        askpass_path = None
+        env = os.environ.copy()
+        run_args: list[str]
+        if needs_sudo or has_inline_sudo:
             password = self._prompt_sudo_password()
             if password is None:
                 return 1, "sudo cancelled by user"
-            # -S reads password from stdin, -p '' suppresses prompt text.
-            effective_command = self._wrap_with_sudo(command)
-            stdin_data = password + "\n"
+            askpass_path = self._create_askpass_helper()
+            env["SUDO_ASKPASS"] = askpass_path
+            env["PROMPTOS_SUDO_PASS"] = password
+            if needs_sudo:
+                cmd_no_sudo = self._strip_leading_sudo(command)
+                run_args = ["sudo", "-A", "bash", "-lc", cmd_no_sudo]
+            else:
+                rewritten = self._inject_inline_sudo_flags(command)
+                run_args = ["bash", "-lc", rewritten]
+        else:
+            run_args = ["bash", "-lc", command]
 
-        proc = subprocess.run(
-            effective_command,
-            shell=True,
-            text=True,
-            capture_output=True,
-            cwd=self.current_cwd,
-            input=stdin_data,
-        )
+        try:
+            proc = subprocess.run(
+                run_args,
+                text=True,
+                capture_output=True,
+                cwd=self.current_cwd,
+                env=env,
+            )
+        finally:
+            if askpass_path:
+                try:
+                    os.remove(askpass_path)
+                except OSError:
+                    pass
         output = (proc.stdout or "") + (proc.stderr or "")
         if len(output) > 6000:
             output = output[:6000] + "\n...[truncated]..."
         if (
             proc.returncode != 0
-            and not needs_sudo
+            and not (needs_sudo or has_inline_sudo)
             and os.geteuid() != 0
             and self._should_retry_with_sudo(command, output)
         ):
             password = self._prompt_sudo_password()
             if password is None:
                 return proc.returncode, output + "\n\nsudo cancelled by user"
-            retry = subprocess.run(
-                self._wrap_with_sudo(command),
-                shell=True,
-                text=True,
-                capture_output=True,
-                cwd=self.current_cwd,
-                input=password + "\n",
-            )
+            askpass_path = self._create_askpass_helper()
+            env_retry = os.environ.copy()
+            env_retry["SUDO_ASKPASS"] = askpass_path
+            env_retry["PROMPTOS_SUDO_PASS"] = password
+            try:
+                retry = subprocess.run(
+                    ["sudo", "-A", "bash", "-lc", command],
+                    text=True,
+                    capture_output=True,
+                    cwd=self.current_cwd,
+                    env=env_retry,
+                )
+            finally:
+                try:
+                    os.remove(askpass_path)
+                except OSError:
+                    pass
             output = (retry.stdout or "") + (retry.stderr or "")
             if len(output) > 6000:
                 output = output[:6000] + "\n...[truncated]..."
@@ -1049,27 +1077,34 @@ class PromptOSWindow(Adw.ApplicationWindow):
         return proc.returncode, output
 
     def _has_explicit_sudo(self, command: str) -> bool:
-        try:
-            parts = shlex.split(command)
-        except ValueError:
-            return command.strip().startswith("sudo ")
-        if not parts:
-            return False
-        head = parts[0]
-        return head == "sudo" or head.endswith("/sudo")
+        return bool(SUDO_PREFIX_RE.match(command or ""))
 
-    def _wrap_with_sudo(self, command: str) -> str:
-        cmd = command.strip()
-        if self._has_explicit_sudo(cmd):
+    def _has_inline_sudo(self, command: str) -> bool:
+        if self._has_explicit_sudo(command):
+            return False
+        return bool(INLINE_SUDO_RE.search(command or ""))
+
+    def _strip_leading_sudo(self, command: str) -> str:
+        return SUDO_PREFIX_RE.sub("", command, count=1).strip() or "true"
+
+    def _inject_inline_sudo_flags(self, command: str) -> str:
+        # For sudo used inside shell chains, ensure stdin password mode is enabled.
+        return INLINE_SUDO_RE.sub(r"\1\2 -A", command)
+
+    def _create_askpass_helper(self) -> str:
+        fd, path = tempfile.mkstemp(prefix="promptos-askpass-", text=True)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write("#!/usr/bin/env sh\n")
+                f.write("printf '%s' \"$PROMPTOS_SUDO_PASS\"\n")
+            os.chmod(path, 0o700)
+        except Exception:
             try:
-                parts = shlex.split(cmd)
-                if parts and (parts[0] == "sudo" or parts[0].endswith("/sudo")):
-                    rest = " ".join(parts[1:])
-                    return f"sudo -S -p '' {rest}"
-            except ValueError:
-                if cmd.startswith("sudo "):
-                    return f"sudo -S -p '' {cmd[5:].strip()}"
-        return f"sudo -S -p '' {cmd}"
+                os.remove(path)
+            except OSError:
+                pass
+            raise
+        return path
 
     def _should_retry_with_sudo(self, command: str, output: str) -> bool:
         text = (output or "").lower()
