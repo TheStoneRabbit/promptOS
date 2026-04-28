@@ -42,6 +42,8 @@ from providers import Message, get_provider, list_providers
 CMD_RE = re.compile(r"^\s*CMD:\s*(.+?)\s*$", re.MULTILINE)
 FENCED_CODE_RE = re.compile(r"```([a-zA-Z0-9_+-]+)?\n(.*?)```", re.DOTALL)
 INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+STRONG_RE = re.compile(r"\*\*([^*\n]+)\*\*")
+EM_RE = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 APP_CSS = b"""
@@ -116,25 +118,9 @@ class ChatBubble(Gtk.Box):
     def _add_text_block(self, text: str):
         if not text:
             return
-        overlay = Gtk.Overlay()
-        overlay.set_hexpand(True)
-
         block = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        block.set_margin_top(6)
-        block.set_margin_end(6)
-        copy_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
-        copy_btn.add_css_class("flat")
-        copy_btn.set_tooltip_text("Copy")
-        copy_btn.connect("clicked", lambda *_: self._copy_to_clipboard(text))
-        copy_btn.set_halign(Gtk.Align.END)
-        copy_btn.set_valign(Gtk.Align.START)
-        copy_btn.set_size_request(20, 20)
-        copy_btn.set_can_focus(False)
-        overlay.add_overlay(copy_btn)
-
         self._append_markdown_text(block, text)
-        overlay.set_child(block)
-        self.inner.append(overlay)
+        self.inner.append(block)
 
     def _append_markdown_text(self, parent: Gtk.Box, text: str):
         lines = text.splitlines() or [text]
@@ -166,6 +152,8 @@ class ChatBubble(Gtk.Box):
             .replace("<", "&lt;")
             .replace(">", "&gt;")
         )
+        esc = STRONG_RE.sub(r"<b>\1</b>", esc)
+        esc = EM_RE.sub(r"<i>\1</i>", esc)
         esc = INLINE_CODE_RE.sub(r'<span font_family="monospace">`\1`</span>', esc)
         lbl = Gtk.Label(xalign=0)
         lbl.set_wrap(True)
