@@ -293,6 +293,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.active_provider = None
         self.pending_cards: dict[str, CommandCard] = {}
         self.current_assistant_bubble: ChatBubble | None = None
+        self.autorun_commands = False
 
         self._load_env_config()
         self._install_css()
@@ -352,6 +353,15 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.provider_badge = Gtk.Label(label=f"Provider: {provider_name}")
         self.provider_badge.add_css_class("pill")
         topbar.append(self.provider_badge)
+
+        autorun_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        autorun_label = Gtk.Label(label="Autorun CMD")
+        self.autorun_switch = Gtk.Switch()
+        self.autorun_switch.set_active(False)
+        self.autorun_switch.connect("notify::active", self._on_autorun_toggled)
+        autorun_box.append(autorun_label)
+        autorun_box.append(self.autorun_switch)
+        topbar.append(autorun_box)
 
         new_btn = Gtk.Button(label="New Chat")
         new_btn.connect("clicked", lambda *_: self._new_chat())
@@ -634,6 +644,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
         name = self.active_provider.name if self.active_provider else "none"
         self.provider_badge.set_text(f"Provider: {name}")
 
+    def _on_autorun_toggled(self, switch: Gtk.Switch, _param):
+        self.autorun_commands = switch.get_active()
+
     def _parse_cmd_cards(self, text: str):
         for command in self._extract_suggested_commands(text):
             if not command or command in self.pending_cards:
@@ -641,6 +654,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
             card = CommandCard(command, self._run_command_card, self._skip_command_card)
             self.pending_cards[command] = card
             self.cmd_cards_box.append(card)
+            if self.autorun_commands:
+                self._run_command_card(command)
 
     def _extract_suggested_commands(self, text: str) -> list[str]:
         cmds: list[str] = []
@@ -659,18 +674,25 @@ class PromptOSWindow(Adw.ApplicationWindow):
                     body = lines[i]
                     if body.strip().startswith("```"):
                         break
-                    candidate = body.strip().strip("`")
+                    candidate = self._normalize_command(body)
                     if candidate:
                         cmds.append(candidate)
                     i += 1
                 i += 1
                 continue
 
-            candidate = payload.strip().strip("`")
+            candidate = self._normalize_command(payload)
             if candidate:
                 cmds.append(candidate)
             i += 1
         return cmds
+
+    def _normalize_command(self, text: str) -> str:
+        cmd = text.strip().strip("`").strip()
+        # Remove accidental trailing quote artifacts from model output.
+        while cmd and cmd[-1] in ("'", '"'):
+            cmd = cmd[:-1].rstrip()
+        return cmd
 
     def _run_command_card(self, command: str):
         card = self.pending_cards.get(command)
