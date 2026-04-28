@@ -335,6 +335,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.session_search_text = ""
         self.follow_output = True
         self._programmatic_scroll = False
+        self._generation_seq = 0
+        self._cancelled_generations: set[int] = set()
 
         self._load_env_config()
         self._install_css()
@@ -534,9 +536,13 @@ class PromptOSWindow(Adw.ApplicationWindow):
         send.add_css_class("suggested-action")
         send.connect("clicked", lambda *_: self._submit())
         self.send_btn = send
+        self.stop_btn = Gtk.Button(label="Stop")
+        self.stop_btn.connect("clicked", lambda *_: self._stop_generation())
+        self.stop_btn.set_sensitive(False)
 
         row.append(self.entry)
         row.append(send)
+        row.append(self.stop_btn)
         composer.append(row)
         main.append(composer)
 
@@ -625,6 +631,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
     def _set_input_enabled(self, enabled: bool):
         self.entry.set_sensitive(enabled)
         self.send_btn.set_sensitive(enabled)
+        self.stop_btn.set_sensitive(not enabled)
         if enabled:
             self.entry.grab_focus()
 
@@ -647,6 +654,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.history.append(Message("user", text))
         self._refresh_system_message()
         self._set_input_enabled(False)
+        self._generation_seq += 1
+        generation_id = self._generation_seq
 
         bubble = self._add_bubble("assistant", "")
         self.current_assistant_bubble = bubble
@@ -655,16 +664,21 @@ class PromptOSWindow(Adw.ApplicationWindow):
             chunks: list[str] = []
             try:
                 for chunk in self.active_provider.chat(self.history, stream=True):
+                    if generation_id in self._cancelled_generations:
+                        break
                     chunks.append(chunk)
                     joined = "".join(chunks)
-                    GLib.idle_add(self._update_streaming_bubble, joined)
+                    GLib.idle_add(self._update_streaming_bubble, generation_id, joined)
+                if generation_id in self._cancelled_generations:
+                    GLib.idle_add(self._finalize_response, generation_id, "[stopped]")
+                    return
                 response = "".join(chunks).strip()
                 if not response:
                     response = "(no response)"
                 self.history.append(Message("assistant", response))
-                GLib.idle_add(self._finalize_response, response)
+                GLib.idle_add(self._finalize_response, generation_id, response)
             except Exception as e:
-                GLib.idle_add(self._finalize_response, f"Provider error: {e}")
+                GLib.idle_add(self._finalize_response, generation_id, f"Provider error: {e}")
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -817,13 +831,21 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._request_suggested_next_async()
         return False
 
-    def _update_streaming_bubble(self, text: str):
+    def _update_streaming_bubble(self, generation_id: int, text: str):
+        if generation_id in self._cancelled_generations:
+            return False
         if self.current_assistant_bubble:
             self.current_assistant_bubble.set_text(text)
         self._scroll_to_bottom()
         return False
 
-    def _finalize_response(self, response: str):
+    def _finalize_response(self, generation_id: int, response: str):
+        if generation_id in self._cancelled_generations:
+            self._cancelled_generations.discard(generation_id)
+            self.current_assistant_bubble = None
+            self._set_input_enabled(True)
+            self._refresh_provider_badge()
+            return False
         if self.current_assistant_bubble:
             self.current_assistant_bubble.set_text(response)
         self.current_assistant_bubble = None
@@ -833,6 +855,11 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._refresh_provider_badge()
         self._refresh_sessions()
         return False
+
+    def _stop_generation(self):
+        if self.stop_btn.get_sensitive():
+            self._cancelled_generations.add(self._generation_seq)
+            self._set_input_enabled(True)
 
     def _refresh_provider_badge(self):
         name = self.active_provider.name if self.active_provider else "none"
