@@ -41,6 +41,8 @@ from providers import Message, get_provider, list_providers
 
 CMD_RE = re.compile(r"^\s*CMD:\s*(.+?)\s*$", re.MULTILINE)
 FENCED_CODE_RE = re.compile(r"```([a-zA-Z0-9_+-]+)?\n(.*?)```", re.DOTALL)
+INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 APP_CSS = b"""
 textview.code-block-view text {
@@ -48,6 +50,12 @@ textview.code-block-view text {
 }
 textview.output-block text {
   color: #9ad97d;
+}
+label.inline-code {
+  font-family: monospace;
+}
+label.md-heading {
+  font-weight: 700;
 }
 """
 
@@ -108,50 +116,87 @@ class ChatBubble(Gtk.Box):
     def _add_text_block(self, text: str):
         if not text:
             return
+        overlay = Gtk.Overlay()
+        overlay.set_hexpand(True)
+
         block = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        spacer = Gtk.Box()
-        spacer.set_hexpand(True)
-        header.append(spacer)
+        block.set_margin_top(6)
+        block.set_margin_end(6)
         copy_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
         copy_btn.add_css_class("flat")
         copy_btn.set_tooltip_text("Copy")
+        copy_btn.connect("clicked", lambda *_: self._copy_to_clipboard(text))
         copy_btn.set_halign(Gtk.Align.END)
         copy_btn.set_valign(Gtk.Align.START)
-        copy_btn.connect("clicked", lambda *_: self._copy_to_clipboard(text))
-        header.append(copy_btn)
-        block.append(header)
+        copy_btn.set_size_request(20, 20)
+        copy_btn.set_can_focus(False)
+        overlay.add_overlay(copy_btn)
 
-        label = Gtk.Label(xalign=0)
-        label.set_wrap(True)
-        label.set_wrap_mode(Gtk.WrapMode.CHAR)
-        label.set_selectable(True)
-        label.set_max_width_chars(95)
-        label.set_text(text)
-        block.append(label)
-        self.inner.append(block)
+        self._append_markdown_text(block, text)
+        overlay.set_child(block)
+        self.inner.append(overlay)
+
+    def _append_markdown_text(self, parent: Gtk.Box, text: str):
+        lines = text.splitlines() or [text]
+        for line in lines:
+            heading = HEADING_RE.match(line)
+            if heading:
+                lbl = Gtk.Label(xalign=0)
+                lbl.set_wrap(True)
+                lbl.set_wrap_mode(Gtk.WrapMode.CHAR)
+                lbl.set_selectable(True)
+                lbl.set_max_width_chars(95)
+                lbl.set_text(heading.group(2).strip())
+                lbl.add_css_class("md-heading")
+                parent.append(lbl)
+                continue
+
+            if line.strip().startswith(("- ", "* ")):
+                self._append_inline_markup_label(parent, f"• {line.strip()[2:].strip()}")
+                continue
+            if re.match(r"^\d+\.\s+", line.strip()):
+                self._append_inline_markup_label(parent, line.strip())
+                continue
+            self._append_inline_markup_label(parent, line)
+
+    def _append_inline_markup_label(self, parent: Gtk.Box, text: str):
+        # Escape for Pango markup, then re-introduce inline-code spans safely.
+        esc = (
+            text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        esc = INLINE_CODE_RE.sub(r'<span font_family="monospace">`\1`</span>', esc)
+        lbl = Gtk.Label(xalign=0)
+        lbl.set_wrap(True)
+        lbl.set_wrap_mode(Gtk.WrapMode.CHAR)
+        lbl.set_selectable(True)
+        lbl.set_max_width_chars(95)
+        lbl.set_use_markup(True)
+        lbl.set_markup(esc if esc else " ")
+        parent.append(lbl)
 
     def _add_code_block(self, code: str, lang: str | None = None):
         frame = Gtk.Frame()
         frame.add_css_class("code-block")
+
+        overlay = Gtk.Overlay()
+        overlay.set_hexpand(True)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_margin_top(8)
         box.set_margin_bottom(8)
         box.set_margin_start(8)
         box.set_margin_end(8)
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        spacer = Gtk.Box()
-        spacer.set_hexpand(True)
-        header.append(spacer)
         copy_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
         copy_btn.add_css_class("flat")
         copy_btn.set_tooltip_text("Copy")
+        copy_btn.connect("clicked", lambda *_: self._copy_to_clipboard(code.rstrip("\n")))
         copy_btn.set_halign(Gtk.Align.END)
         copy_btn.set_valign(Gtk.Align.START)
-        copy_btn.connect("clicked", lambda *_: self._copy_to_clipboard(code.rstrip("\n")))
-        header.append(copy_btn)
-        box.append(header)
+        copy_btn.set_size_request(20, 20)
+        copy_btn.set_can_focus(False)
+        overlay.add_overlay(copy_btn)
 
         tv = Gtk.TextView()
         tv.set_editable(False)
@@ -165,7 +210,8 @@ class ChatBubble(Gtk.Box):
         tv.get_buffer().set_text(code.rstrip("\n"))
         box.append(tv)
 
-        frame.set_child(box)
+        overlay.set_child(box)
+        frame.set_child(overlay)
         self.inner.append(frame)
 
     def _copy_to_clipboard(self, text: str):
@@ -734,7 +780,6 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 self._add_user_message(msg.content)
             elif msg.role == "assistant":
                 self._add_assistant_message(msg.content)
-                self._parse_cmd_cards(msg.content)
 
 
 class PromptOSApp(Adw.Application):
