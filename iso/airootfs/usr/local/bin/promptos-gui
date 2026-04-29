@@ -53,7 +53,7 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 APP_CSS = b"""
 textview.code-block-view text {
-  color: #d8dee9;
+  color: #ff9f1c;
 }
 textview.output-block text {
   color: #9ad97d;
@@ -427,71 +427,12 @@ class ChatBubble(Gtk.Box):
             clipboard.set(text)
 
     def _highlight_code_markup(self, code: str, lang: str) -> str:
-        if not lang:
-            lang = self._guess_code_lang(code)
         esc = (
             code.replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
         )
-        # Palette
-        C_KW = "#c792ea"     # keywords
-        C_STR = "#ecc48d"    # strings
-        C_NUM = "#f78c6c"    # numbers
-        C_FUN = "#82aaff"    # function names
-        C_OP = "#89ddff"     # operators
-        C_COM = "#7f8c98"    # comments
-        C_KEY = "#7cc7ff"    # json keys
-
-        protected: list[str] = []
-
-        def protect(pattern: str, color: str, text: str, flags: int = 0) -> str:
-            rx = re.compile(pattern, flags)
-
-            def _repl(m):
-                token = f"@@TOK{len(protected)}@@"
-                protected.append(f'<span foreground="{color}">{m.group(0)}</span>')
-                return token
-
-            return rx.sub(_repl, text)
-
-        if lang in ("bash", "sh", "zsh", "shell"):
-            esc = protect(r"(?m)^\s*#.*$", C_COM, esc)
-            esc = protect(r'"(?:[^"\\]|\\.)*"?(?=\s|$)|\'(?:[^\'\\]|\\.)*\'?(?=\s|$)', C_STR, esc)
-            esc = protect(r"\b\d+(\.\d+)?\b", C_NUM, esc)
-            esc = protect(
-                r"\b(if|then|fi|for|do|done|while|case|esac|in|function|sudo|cd|ls|cat|grep|awk|sed|git|python|bash)\b",
-                C_KW,
-                esc,
-            )
-            esc = protect(r"(?m)\b([A-Za-z_][A-Za-z0-9_]*)\s*(?=\()", C_FUN, esc)
-            esc = protect(r"(\|\||&&|==|!=|<=|>=|=~|[=+\-*/%<>|])", C_OP, esc)
-        elif lang in ("python", "py"):
-            esc = protect(r"(?m)^\s*#.*$", C_COM, esc)
-            esc = protect(r'\b[furbFURB]*"(?:[^"\\]|\\.)*"?(?=\s|$)|\b[furbFURB]*\'(?:[^\'\\]|\\.)*\'?(?=\s|$)', C_STR, esc)
-            esc = protect(r"\b\d+(\.\d+)?\b", C_NUM, esc)
-            esc = protect(
-                r"\b(def|class|if|elif|else|for|while|try|except|finally|return|import|from|with|as|pass|break|continue|lambda|True|False|None|and|or|not|is|in)\b",
-                C_KW,
-                esc,
-            )
-            esc = protect(r"(?m)\b([A-Za-z_][A-Za-z0-9_]*)\s*(?=\()", C_FUN, esc)
-            esc = protect(r"(\*\*|//|==|!=|<=|>=|:=|->|[=+\-*/%<>])", C_OP, esc)
-        elif lang in ("json",):
-            esc = protect(r'"(?:[^"\\]|\\.)*"\s*(?=:)', C_KEY, esc)
-            esc = protect(r'(?<=:)\s*"(?:[^"\\]|\\.)*"?(?=\s*[,}\]])', C_STR, esc)
-            esc = protect(r"\b-?\d+(\.\d+)?\b", C_NUM, esc)
-            esc = protect(r"\b(true|false|null)\b", C_KW, esc)
-            esc = protect(r"([{}\[\]:,])", C_OP, esc)
-        else:
-            esc = protect(r'"(?:[^"\\]|\\.)*"?(?=\s|$)|\'(?:[^\'\\]|\\.)*\'?(?=\s|$)', C_STR, esc)
-            esc = protect(r"\b\d+(\.\d+)?\b", C_NUM, esc)
-            esc = protect(r"(?m)\b([A-Za-z_][A-Za-z0-9_]*)\s*(?=\()", C_FUN, esc)
-            esc = protect(r"(\*\*|//|==|!=|<=|>=|:=|[=+\-*/%<>|])", C_OP, esc)
-
-        for idx, span in enumerate(protected):
-            esc = esc.replace(f"@@TOK{idx}@@", span)
-        return f'<span font_family="monospace">{esc}</span>'
+        return f'<span font_family="monospace" foreground="#ff9f1c">{esc}</span>'
 
     def _guess_code_lang(self, code: str) -> str:
         s = code.strip()
