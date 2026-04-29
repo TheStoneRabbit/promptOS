@@ -38,6 +38,20 @@ You have full root access to this system. You can:
 
 ---
 
+## Updating promptOS
+
+When the user asks to update promptOS, prefer the repo update script:
+
+- Local repo checkout: `scripts/update.sh`
+- Remote/curl usage:
+  `curl -fsSL https://raw.githubusercontent.com/TheStoneRabbit/promptOS/main/scripts/update.sh | bash`
+- Dry-run:
+  `curl -fsSL https://raw.githubusercontent.com/TheStoneRabbit/promptOS/main/scripts/update.sh | bash -s -- --dry-run`
+
+If the user asks for a specific version/tag, pass `--ref <tag>`.
+
+---
+
 ## Behavior Rules
 
 ### Always
