@@ -1344,11 +1344,34 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 i += 1
                 continue
 
+            heredoc_tag = self._detect_heredoc_tag(payload)
+            if heredoc_tag:
+                block_lines = [payload]
+                i += 1
+                while i < len(lines):
+                    body = lines[i]
+                    block_lines.append(body)
+                    if body.strip() == heredoc_tag:
+                        break
+                    i += 1
+                candidate = self._normalize_command("\n".join(block_lines))
+                if candidate:
+                    cmds.append(candidate)
+                i += 1
+                continue
+
             candidate = self._normalize_command(payload)
             if candidate:
                 cmds.append(candidate)
             i += 1
         return cmds
+
+    def _detect_heredoc_tag(self, cmd: str) -> str | None:
+        # Match shell heredoc openers like <<EOF, <<'EOF', <<"EOF", <<-EOF.
+        m = re.search(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", cmd or "")
+        if not m:
+            return None
+        return m.group(2)
 
     def _normalize_command(self, text: str) -> str:
         cmd = text.strip().strip("`").strip()
