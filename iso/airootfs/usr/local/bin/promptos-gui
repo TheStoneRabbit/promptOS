@@ -75,6 +75,18 @@ frame.user-bubble > border {
 frame.user-bubble label {
   color: #ffffff;
 }
+button.promptos-btn {
+  background-image: linear-gradient(135deg, #5b2df8 0%, #8f6bff 100%);
+  color: #ffffff;
+}
+button.stop-btn {
+  background-color: #c62828;
+  color: #ffffff;
+}
+button.stop-btn:disabled {
+  background-color: rgba(120, 120, 120, 0.4);
+  color: rgba(240, 240, 240, 0.8);
+}
 scrolledwindow.composer-input {
   background-color: rgba(75, 85, 99, 0.28);
   border-radius: 12px;
@@ -262,7 +274,9 @@ class ChatBubble(Gtk.Box):
             code_label.add_css_class("output-block")
         else:
             code_label.add_css_class("code-block-view")
-        code_label.set_text(code.rstrip("\n"))
+        markup = self._highlight_code_markup(code.rstrip("\n"), (lang or "").lower())
+        code_label.set_use_markup(True)
+        code_label.set_markup(markup)
         box.append(code_label)
 
         overlay.set_child(box)
@@ -273,6 +287,34 @@ class ChatBubble(Gtk.Box):
         clipboard = self.get_clipboard()
         if clipboard:
             clipboard.set(text)
+
+    def _highlight_code_markup(self, code: str, lang: str) -> str:
+        esc = (
+            code.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        if lang in ("bash", "sh", "zsh", "shell"):
+            esc = re.sub(r"(?m)(^\\s*#.*$)", r'<span foreground="#8fb3ff">\\1</span>', esc)
+            esc = re.sub(
+                r"\\b(if|then|fi|for|do|done|while|case|esac|sudo|cd|ls|cat|grep|awk|sed|git|python|bash)\\b",
+                r'<span foreground="#d17dff">\\1</span>',
+                esc,
+            )
+        elif lang in ("python", "py"):
+            esc = re.sub(r"(?m)(^\\s*#.*$)", r'<span foreground="#8fb3ff">\\1</span>', esc)
+            esc = re.sub(
+                r"\\b(def|class|if|elif|else|for|while|try|except|return|import|from|with|as|True|False|None)\\b",
+                r'<span foreground="#d17dff">\\1</span>',
+                esc,
+            )
+        elif lang in ("json",):
+            esc = re.sub(
+                r'(&quot;[^&]*&quot;)\\s*:',
+                r'<span foreground="#7cc7ff">\\1</span>:',
+                esc,
+            )
+        return f'<span font_family="monospace">{esc}</span>'
 
     def _set_rich_text(self, text: str):
         self._clear_inner()
@@ -312,11 +354,13 @@ class CommandCard(Gtk.Frame):
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         run_btn = Gtk.Button(label="Run")
+        run_btn.add_css_class("promptos-btn")
         run_btn.add_css_class("suggested-action")
         run_btn.connect("clicked", lambda *_: on_run(self.command))
         self.run_btn = run_btn
 
         skip_btn = Gtk.Button(label="Dismiss")
+        skip_btn.add_css_class("promptos-btn")
         skip_btn.connect("clicked", lambda *_: on_skip(self.command))
 
         self.state = Gtk.Label(label="Pending", xalign=0)
@@ -446,10 +490,12 @@ class PromptOSWindow(Adw.ApplicationWindow):
         topbar.append(autorun_box)
 
         new_btn = Gtk.Button(label="New Chat")
+        new_btn.add_css_class("promptos-btn")
         new_btn.connect("clicked", lambda *_: self._new_chat())
         topbar.append(new_btn)
 
         close_btn = Gtk.Button(label="X")
+        close_btn.add_css_class("promptos-btn")
         close_btn.set_tooltip_text("Close promptOS")
         close_btn.connect("clicked", lambda *_: self.close())
         topbar.append(close_btn)
@@ -498,6 +544,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         sidebar.append(sessions_scroll)
 
         refresh_btn = Gtk.Button(label="Refresh")
+        refresh_btn.add_css_class("promptos-btn")
         refresh_btn.connect("clicked", lambda *_: self._refresh_sessions())
         refresh_btn.set_margin_end(8)
         sidebar.append(refresh_btn)
@@ -542,13 +589,6 @@ class PromptOSWindow(Adw.ApplicationWindow):
         composer.set_margin_start(10)
         composer.set_margin_end(10)
 
-        quick = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        for text in ["/providers", "/model status", "/wifi", "Summarize system status"]:
-            btn = Gtk.Button(label=text)
-            btn.connect("clicked", lambda _, t=text: self._use_quick_prompt(t))
-            quick.append(btn)
-        composer.append(quick)
-
         suggest_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         suggest_row.set_margin_bottom(2)
         suggest_title = Gtk.Label(label="Suggested next:", xalign=0)
@@ -567,6 +607,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.entry = Gtk.TextView()
         self.entry.set_hexpand(True)
         self.entry.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.entry.set_placeholder_text("Interact with promptOS...")
         self.entry.set_top_margin(8)
         self.entry.set_bottom_margin(8)
         self.entry.set_left_margin(8)
@@ -590,6 +631,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         send.set_vexpand(False)
         self.send_btn = send
         self.stop_btn = Gtk.Button(label="Stop")
+        self.stop_btn.add_css_class("stop-btn")
         self.stop_btn.connect("clicked", lambda *_: self._stop_generation())
         self.stop_btn.set_valign(Gtk.Align.START)
         self.stop_btn.set_vexpand(False)
@@ -1296,6 +1338,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             title_lbl.set_hexpand(True)
             delete_btn = Gtk.Button(label="X")
             delete_btn.add_css_class("flat")
+            delete_btn.add_css_class("promptos-btn")
             delete_btn.set_size_request(22, 22)
             delete_btn.set_margin_start(4)
             delete_btn.set_tooltip_text("Delete session")
@@ -1899,6 +1942,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         for suggestion in self.suggested_next_items:
             btn = Gtk.Button()
             btn.add_css_class("flat")
+            btn.add_css_class("promptos-btn")
             btn.connect("clicked", lambda _, s=suggestion: self._use_specific_suggestion(s))
             lbl = Gtk.Label(xalign=0)
             lbl.set_wrap(True)
