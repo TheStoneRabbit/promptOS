@@ -811,6 +811,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.pending_cards.clear()
         self.current_assistant_bubble = None
         self.active_session_name = "New Chat"
+        self._refresh_sessions()  # Ensure new chat shows as recent session
         # --PROMPTOS NEW CHAT SESSION PATCH HERE--
         self._set_suggested_next("Ask about system status, logs, networking, or package updates.")
 
