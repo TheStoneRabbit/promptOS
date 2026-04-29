@@ -43,15 +43,14 @@ You have full root access to this system. You can:
 When the user asks to update promptOS, prefer the repo update script:
 
 - Local repo checkout: `scripts/update.sh`
-- For private-repo remote usage, prefer SSH-key flow:
-  `tmp="$(mktemp -d)" && git clone --depth 1 git@github.com:TheStoneRabbit/promptOS.git "$tmp/promptOS" && bash "$tmp/promptOS/scripts/update.sh" && rm -rf "$tmp"`
-- Raw curl usage (works when repo is public, or with GitHub token auth):
+- Remote/curl usage (public repo):
   `curl -fsSL https://raw.githubusercontent.com/TheStoneRabbit/promptOS/main/scripts/update.sh | bash`
 - Dry-run:
   `curl -fsSL https://raw.githubusercontent.com/TheStoneRabbit/promptOS/main/scripts/update.sh | bash -s -- --dry-run`
+- Optional SSH fallback:
+  `tmp="$(mktemp -d)" && git clone --depth 1 git@github.com:TheStoneRabbit/promptOS.git "$tmp/promptOS" && bash "$tmp/promptOS/scripts/update.sh" && rm -rf "$tmp"`
 
 If the user asks for a specific version/tag, pass `--ref <tag>`.
-Note: repo visibility may change later; adjust recommendation accordingly.
 
 ---
 
