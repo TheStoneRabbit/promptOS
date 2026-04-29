@@ -457,7 +457,7 @@ class ChatBubble(Gtk.Box):
 
         if lang in ("bash", "sh", "zsh", "shell"):
             esc = protect(r"(?m)^\s*#.*$", C_COM, esc)
-            esc = protect(r'"([^"\\]|\\.)*"|\'([^\'\\]|\\.)*\'', C_STR, esc)
+            esc = protect(r'"(?:[^"\\]|\\.)*"?(?=\s|$)|\'(?:[^\'\\]|\\.)*\'?(?=\s|$)', C_STR, esc)
             esc = protect(r"\b\d+(\.\d+)?\b", C_NUM, esc)
             esc = protect(
                 r"\b(if|then|fi|for|do|done|while|case|esac|in|function|sudo|cd|ls|cat|grep|awk|sed|git|python|bash)\b",
@@ -468,7 +468,7 @@ class ChatBubble(Gtk.Box):
             esc = protect(r"(\|\||&&|==|!=|<=|>=|=~|[=+\-*/%<>|])", C_OP, esc)
         elif lang in ("python", "py"):
             esc = protect(r"(?m)^\s*#.*$", C_COM, esc)
-            esc = protect(r'\b[furbFURB]*"([^"\\]|\\.)*"|\b[furbFURB]*\'([^\'\\]|\\.)*\'', C_STR, esc)
+            esc = protect(r'\b[furbFURB]*"(?:[^"\\]|\\.)*"?(?=\s|$)|\b[furbFURB]*\'(?:[^\'\\]|\\.)*\'?(?=\s|$)', C_STR, esc)
             esc = protect(r"\b\d+(\.\d+)?\b", C_NUM, esc)
             esc = protect(
                 r"\b(def|class|if|elif|else|for|while|try|except|finally|return|import|from|with|as|pass|break|continue|lambda|True|False|None|and|or|not|is|in)\b",
@@ -479,12 +479,12 @@ class ChatBubble(Gtk.Box):
             esc = protect(r"(\*\*|//|==|!=|<=|>=|:=|->|[=+\-*/%<>])", C_OP, esc)
         elif lang in ("json",):
             esc = protect(r'"(?:[^"\\]|\\.)*"\s*(?=:)', C_KEY, esc)
-            esc = protect(r'(?<=:)\s*"(?:[^"\\]|\\.)*"', C_STR, esc)
+            esc = protect(r'(?<=:)\s*"(?:[^"\\]|\\.)*"?(?=\s*[,}\]])', C_STR, esc)
             esc = protect(r"\b-?\d+(\.\d+)?\b", C_NUM, esc)
             esc = protect(r"\b(true|false|null)\b", C_KW, esc)
             esc = protect(r"([{}\[\]:,])", C_OP, esc)
         else:
-            esc = protect(r'"([^"\\]|\\.)*"|\'([^\'\\]|\\.)*\'', C_STR, esc)
+            esc = protect(r'"(?:[^"\\]|\\.)*"?(?=\s|$)|\'(?:[^\'\\]|\\.)*\'?(?=\s|$)', C_STR, esc)
             esc = protect(r"\b\d+(\.\d+)?\b", C_NUM, esc)
             esc = protect(r"(?m)\b([A-Za-z_][A-Za-z0-9_]*)\s*(?=\()", C_FUN, esc)
             esc = protect(r"(\*\*|//|==|!=|<=|>=|:=|[=+\-*/%<>|])", C_OP, esc)
