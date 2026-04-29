@@ -64,6 +64,16 @@ label.inline-code {
 label.md-heading {
   font-weight: 700;
 }
+frame.table-cell {
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 4px;
+  background-color: rgba(30, 41, 59, 0.26);
+}
+frame.table-cell-header {
+  border: 1px solid rgba(148, 163, 184, 0.65);
+  border-radius: 4px;
+  background-color: rgba(79, 70, 229, 0.28);
+}
 frame.user-bubble {
   background-image: linear-gradient(135deg, #5b2df8 0%, #8f6bff 55%, #b79bff 100%);
   border-radius: 14px;
@@ -299,6 +309,13 @@ class ChatBubble(Gtk.Box):
         for r, row in enumerate(rows):
             for c in range(col_count):
                 val = row[c] if c < len(row) else ""
+                cell = Gtk.Frame()
+                cell.add_css_class("table-cell-header" if r == 0 else "table-cell")
+                cell_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+                cell_box.set_margin_top(4)
+                cell_box.set_margin_bottom(4)
+                cell_box.set_margin_start(6)
+                cell_box.set_margin_end(6)
                 lbl = Gtk.Label(xalign=0)
                 lbl.set_selectable(True)
                 lbl.set_wrap(False)
@@ -307,7 +324,9 @@ class ChatBubble(Gtk.Box):
                 if r == 0:
                     lbl.add_css_class("heading")
                 lbl.set_text(val)
-                grid.attach(lbl, c, r, 1, 1)
+                cell_box.append(lbl)
+                cell.set_child(cell_box)
+                grid.attach(cell, c, r, 1, 1)
 
         frame.set_child(grid)
         parent.append(frame)
@@ -399,32 +418,48 @@ class ChatBubble(Gtk.Box):
             clipboard.set(text)
 
     def _highlight_code_markup(self, code: str, lang: str) -> str:
+        if not lang:
+            lang = self._guess_code_lang(code)
         esc = (
             code.replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
         )
         if lang in ("bash", "sh", "zsh", "shell"):
-            esc = re.sub(r"(?m)(^\\s*#.*$)", r'<span foreground="#8fb3ff">\\1</span>', esc)
+            esc = re.sub(r"(?m)(^\s*#.*$)", r'<span foreground="#8fb3ff">\1</span>', esc)
             esc = re.sub(
-                r"\\b(if|then|fi|for|do|done|while|case|esac|sudo|cd|ls|cat|grep|awk|sed|git|python|bash)\\b",
-                r'<span foreground="#d17dff">\\1</span>',
+                r"\b(if|then|fi|for|do|done|while|case|esac|sudo|cd|ls|cat|grep|awk|sed|git|python|bash)\b",
+                r'<span foreground="#d17dff">\1</span>',
                 esc,
             )
         elif lang in ("python", "py"):
-            esc = re.sub(r"(?m)(^\\s*#.*$)", r'<span foreground="#8fb3ff">\\1</span>', esc)
+            esc = re.sub(r"(?m)(^\s*#.*$)", r'<span foreground="#8fb3ff">\1</span>', esc)
             esc = re.sub(
-                r"\\b(def|class|if|elif|else|for|while|try|except|return|import|from|with|as|True|False|None)\\b",
-                r'<span foreground="#d17dff">\\1</span>',
+                r"\b(def|class|if|elif|else|for|while|try|except|return|import|from|with|as|True|False|None)\b",
+                r'<span foreground="#d17dff">\1</span>',
                 esc,
             )
         elif lang in ("json",):
             esc = re.sub(
-                r'(&quot;[^&]*&quot;)\\s*:',
-                r'<span foreground="#7cc7ff">\\1</span>:',
+                r'("[^"]*")\s*:',
+                r'<span foreground="#7cc7ff">\1</span>:',
                 esc,
             )
         return f'<span font_family="monospace">{esc}</span>'
+
+    def _guess_code_lang(self, code: str) -> str:
+        s = code.strip()
+        if not s:
+            return ""
+        if s.startswith("{") or s.startswith("["):
+            return "json"
+        if re.search(r"^\s*(def |class |import |from .+ import )", s, re.MULTILINE):
+            return "python"
+        if re.search(r"^\s*#!/.*\b(bash|sh|zsh)\b", s, re.MULTILINE):
+            return "bash"
+        if re.search(r"\b(sudo|apt|pacman|grep|awk|sed|chmod|chown|systemctl)\b", s):
+            return "bash"
+        return ""
 
     def _set_rich_text(self, text: str):
         self._clear_inner()
