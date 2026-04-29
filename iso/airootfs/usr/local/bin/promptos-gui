@@ -79,8 +79,17 @@ button.promptos-btn {
   background-image: linear-gradient(135deg, #5b2df8 0%, #8f6bff 100%);
   color: #ffffff;
 }
+button.neutral-btn {
+  background-color: rgba(107, 114, 128, 0.42);
+  color: #f3f4f6;
+  border: 1px solid rgba(156, 163, 175, 0.55);
+}
 button.stop-btn {
   background-color: #c62828;
+  color: #ffffff;
+}
+button.send-btn {
+  background-color: #1b8f3e;
   color: #ffffff;
 }
 button.stop-btn:disabled {
@@ -626,7 +635,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.entry.add_css_class("composer-input-view")
 
         send = Gtk.Button(label="Send")
-        send.add_css_class("suggested-action")
+        send.add_css_class("send-btn")
         send.connect("clicked", lambda *_: self._submit())
         send.set_valign(Gtk.Align.START)
         send.set_vexpand(False)
@@ -1338,8 +1347,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             title_lbl.set_wrap(False)
             title_lbl.set_hexpand(True)
             delete_btn = Gtk.Button(label="X")
-            delete_btn.add_css_class("flat")
-            delete_btn.add_css_class("promptos-btn")
+            delete_btn.add_css_class("neutral-btn")
             delete_btn.set_size_request(22, 22)
             delete_btn.set_margin_start(4)
             delete_btn.set_tooltip_text("Delete session")
@@ -1943,7 +1951,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         for suggestion in self.suggested_next_items:
             btn = Gtk.Button()
             btn.add_css_class("flat")
-            btn.add_css_class("promptos-btn")
+            btn.add_css_class("neutral-btn")
             btn.connect("clicked", lambda _, s=suggestion: self._use_specific_suggestion(s))
             lbl = Gtk.Label(xalign=0)
             lbl.set_wrap(True)
