@@ -75,12 +75,12 @@ frame.table-cell-header {
   background-color: rgba(79, 70, 229, 0.28);
 }
 frame.user-bubble {
-  background-image: linear-gradient(135deg, #5b2df8 0%, #8f6bff 55%, #b79bff 100%);
+  background-image: linear-gradient(135deg, #0f6d8c 0%, #1293b0 55%, #54c2d9 100%);
   border-radius: 14px;
 }
 frame.user-bubble > border {
   border-radius: 14px;
-  border: 1px solid rgba(183, 155, 255, 0.55);
+  border: 1px solid rgba(84, 194, 217, 0.6);
 }
 frame.user-bubble label {
   color: #ffffff;
@@ -538,11 +538,14 @@ class CommandCard(Gtk.Frame):
         title = Gtk.Label(label="Suggested Command", xalign=0)
         title.add_css_class("caption")
 
-        cmd_label = Gtk.Label(label=command, xalign=0)
-        cmd_label.set_wrap(True)
+        cmd_label = Gtk.Label(label=self._command_preview(command), xalign=0)
+        cmd_label.set_wrap(False)
+        cmd_label.set_ellipsize(Pango.EllipsizeMode.END)
+        cmd_label.set_max_width_chars(72)
         cmd_label.set_selectable(True)
         cmd_label.add_css_class("monospace")
         cmd_label.add_css_class("cmd-suggestion-text")
+        cmd_label.set_tooltip_text(command)
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         run_btn = Gtk.Button(label="Run")
@@ -566,6 +569,20 @@ class CommandCard(Gtk.Frame):
         box.append(actions)
         box.append(self.state)
         self.set_child(box)
+
+    def _command_preview(self, command: str) -> str:
+        lines = command.splitlines()
+        if len(lines) > 1:
+            first = lines[0].strip()
+            last = lines[-1].strip()
+            if not last and len(lines) > 1:
+                last = lines[-2].strip()
+            preview = f"{first} ... {last}".strip()
+        else:
+            preview = command.strip()
+        if len(preview) > 160:
+            preview = preview[:84].rstrip() + " ... " + preview[-56:].lstrip()
+        return preview
 
     def set_state(self, text: str):
         self.state.set_text(text)
