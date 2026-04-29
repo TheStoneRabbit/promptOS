@@ -607,7 +607,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.entry = Gtk.TextView()
         self.entry.set_hexpand(True)
         self.entry.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        self.entry.set_placeholder_text("Interact with promptOS...")
+        if hasattr(self.entry, "set_placeholder_text"):
+            self.entry.set_placeholder_text("Interact with promptOS...")
         self.entry.set_top_margin(8)
         self.entry.set_bottom_margin(8)
         self.entry.set_left_margin(8)
