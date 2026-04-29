@@ -18,6 +18,16 @@ sys.path.insert(0, "/usr/local/lib/promptos")
 from providers import get_provider, list_providers, Message
 import providers as _providers_module
 
+MODEL_ENV_BY_PROVIDER = {
+    "claude": "PROMPTOS_CLAUDE_MODEL",
+    "openai": "PROMPTOS_OPENAI_MODEL",
+    "groq": "PROMPTOS_GROQ_MODEL",
+    "ollama": "PROMPTOS_OLLAMA_MODEL",
+}
+PROMPTOS_CONFIG_PATH = "/etc/promptos/config"
+PROMPTOS_CONVERSATION_MODEL = os.environ.get("PROMPTOS_CONVERSATION_MODEL", "gpt-4.1")
+PROMPTOS_EDIT_MODEL = os.environ.get("PROMPTOS_EDIT_MODEL", "gpt-5-mini")
+
 # ── Rich + prompt_toolkit (with fallback if not installed) ────────────────────
 # Bare Linux TTY ($TERM=linux) has limited capabilities — rich panels and
 # prompt_toolkit cursor tracking cause screen glitches when scrolling.
@@ -291,6 +301,21 @@ def load_config():
                         k, v = k.strip(), v.strip()
                         if v and not os.environ.get(k):
                             os.environ[k] = v
+
+
+def reload_config():
+    """Reload promptOS runtime config so shell commands see config edits immediately."""
+    for key in (
+        "PROMPTOS_PROVIDER",
+        "PROMPTOS_CLAUDE_MODEL",
+        "PROMPTOS_OPENAI_MODEL",
+        "PROMPTOS_GROQ_MODEL",
+        "PROMPTOS_OLLAMA_MODEL",
+        "PROMPTOS_CONVERSATION_MODEL",
+        "PROMPTOS_EDIT_MODEL",
+    ):
+        os.environ.pop(key, None)
+    load_config()
 
 
 def get_system_prompt() -> str:
@@ -765,6 +790,179 @@ def _provider_model(provider) -> str:
     return getattr(provider, "model", "") if provider else ""
 
 
+def _looks_like_file_edit_request(text: str) -> bool:
+    s = (text or "").lower()
+    edit_terms = (
+        "edit", "change", "modify", "update", "patch", "write", "create",
+        "add", "implement", "fix", "refactor", "rename", "remove", "delete",
+    )
+    target_terms = (
+        "file", "code", "repo", "script", "source", "config", "readme",
+        "agent", "prompt", ".py", ".sh", ".md", ".json", ".toml", ".yaml",
+        ".yml", ".css", ".html", ".js", ".ts", ".tsx", ".jsx",
+    )
+    if any(term in s for term in edit_terms) and any(term in s for term in target_terms):
+        return True
+    if any(term in s for term in ("apply_patch", "promptos-patch", "unified diff")):
+        return True
+    return False
+
+
+def route_openai_model_for_turn(active_provider, user_input: str):
+    if not active_provider or active_provider.name != "openai":
+        return active_provider
+    conversation_model = os.environ.get("PROMPTOS_CONVERSATION_MODEL", PROMPTOS_CONVERSATION_MODEL)
+    edit_model = os.environ.get("PROMPTOS_EDIT_MODEL", PROMPTOS_EDIT_MODEL)
+    target = edit_model if _looks_like_file_edit_request(user_input) else conversation_model
+    if _provider_model(active_provider) == target:
+        return active_provider
+    os.environ["PROMPTOS_OPENAI_MODEL"] = target
+    return get_provider("openai") or active_provider
+
+
+def _write_model_config(path: str, key: str, value: str):
+    lines = []
+    found = False
+    if os.path.exists(path):
+        with open(path) as f:
+            for raw in f:
+                line = raw.rstrip("\n")
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#") and "=" in stripped:
+                    existing_key = stripped.split("=", 1)[0].strip()
+                    if existing_key == key:
+                        lines.append(f"{key}={value}")
+                        found = True
+                        continue
+                lines.append(line)
+    if not found:
+        lines.append(f"{key}={value}")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w") as f:
+        f.write("\n".join(lines).rstrip() + "\n")
+    os.chmod(tmp_path, 0o644)
+    os.replace(tmp_path, path)
+
+
+def persist_model_config(key: str, value: str) -> str:
+    try:
+        _write_model_config(PROMPTOS_CONFIG_PATH, key, value)
+        return "(persisted to /etc/promptos/config)"
+    except PermissionError:
+        if os.geteuid() == 0:
+            return "(not persisted: permission denied writing /etc/promptos/config)"
+        script = r'''
+import os
+import sys
+
+path, key, value = sys.argv[1:4]
+lines = []
+found = False
+if os.path.exists(path):
+    with open(path) as f:
+        for raw in f:
+            line = raw.rstrip("\n")
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                existing_key = stripped.split("=", 1)[0].strip()
+                if existing_key == key:
+                    lines.append(f"{key}={value}")
+                    found = True
+                    continue
+            lines.append(line)
+if not found:
+    lines.append(f"{key}={value}")
+os.makedirs(os.path.dirname(path), exist_ok=True)
+tmp_path = f"{path}.tmp"
+with open(tmp_path, "w") as f:
+    f.write("\n".join(lines).rstrip() + "\n")
+os.chmod(tmp_path, 0o644)
+os.replace(tmp_path, path)
+'''
+        result = subprocess.run(["sudo", sys.executable, "-c", script, PROMPTOS_CONFIG_PATH, key, value])
+        if result.returncode == 0:
+            return "(persisted to /etc/promptos/config with sudo)"
+        return f"(not persisted: sudo exited {result.returncode})"
+    except Exception as e:
+        return f"(not persisted: {e})"
+
+
+def print_llm_model_help():
+    text = (
+        "Usage:\n"
+        "  /llm-model show\n"
+        "  /llm-model list [provider]\n"
+        "  /llm-model set <provider> <model>\n"
+        "  /llm-model set <model>"
+    )
+    if RICH:
+        console.print(Panel(text, title="LLM Model", border_style="cyan", box=box.ROUNDED))
+    else:
+        print(text + "\n")
+
+
+def show_current_models(active_provider):
+    reload_config()
+    lines = ["Current provider models:"]
+    for provider, env_key in MODEL_ENV_BY_PROVIDER.items():
+        value = os.environ.get(env_key, "(default)")
+        active = " (active)" if active_provider and active_provider.name == provider else ""
+        lines.append(f"  {provider}: {value}{active}")
+    text = "\n".join(lines)
+    if RICH:
+        console.print(Panel(text, title="LLM Model", border_style="cyan", box=box.ROUNDED))
+    else:
+        print(text + "\n")
+
+
+def handle_llm_model_command(cmd: str, active_provider):
+    parts = cmd.split()
+    if len(parts) == 1 or (len(parts) == 2 and parts[1] == "show"):
+        show_current_models(active_provider)
+        return active_provider
+    if len(parts) >= 2 and parts[1] == "list":
+        show_current_models(active_provider)
+        return active_provider
+    if len(parts) < 3 or parts[1] != "set":
+        print_llm_model_help()
+        return active_provider
+
+    if len(parts) == 3:
+        if not active_provider:
+            print("No active provider to set model for.\n")
+            return active_provider
+        provider_name = active_provider.name
+        model = parts[2]
+    else:
+        provider_name = parts[2].lower()
+        model = " ".join(parts[3:]).strip()
+
+    if provider_name not in MODEL_ENV_BY_PROVIDER:
+        print("Unknown provider. Use one of: claude, openai, groq, ollama.\n")
+        return active_provider
+    if not model:
+        print("Model cannot be empty.\n")
+        return active_provider
+
+    env_key = MODEL_ENV_BY_PROVIDER[provider_name]
+    os.environ[env_key] = model
+    persist_msg = persist_model_config(env_key, model)
+    reload_config()
+
+    if active_provider and active_provider.name == provider_name:
+        active_provider = get_provider(provider_name)
+    active = active_provider.name if active_provider else "none"
+    if active == provider_name:
+        print(f"Set {provider_name} model to {model}. {persist_msg}\n")
+    else:
+        print(
+            f"Set {provider_name} model to {model}. Active provider is still {active}; "
+            f"switch to {provider_name} to use it. {persist_msg}\n"
+        )
+    return active_provider
+
+
 def print_banner(provider):
     provider_name = provider.name if provider else None
     model = _provider_model(provider)
@@ -804,6 +1002,7 @@ def print_help():
             "[bold]promptsh commands[/bold]\n\n"
             "  [cyan]/providers[/cyan]         — list all providers and status\n"
             "  [cyan]/verify-model[/cyan]      — show the active provider/model in use\n"
+            "  [cyan]/llm-model[/cyan]         — show or set provider model selection\n"
             "  [cyan]/switch \\<name>[/cyan]     — switch provider (claude, openai, groq, ollama)\n"
             "  [cyan]/clear[/cyan]             — clear conversation history\n"
             "  [cyan]/history[/cyan]           — show conversation history\n"
@@ -830,6 +1029,7 @@ def print_help():
   promptsh commands:
     /providers          — list all providers and their status
     /verify-model       — show the active provider/model in use
+    /llm-model          — show or set provider model selection
     /switch <name>      — switch active provider (claude, openai, groq, ollama)
     /clear              — clear conversation history
     /history            — show conversation history
@@ -1093,6 +1293,7 @@ def main():
                 continue
 
             if user_input == "/providers":
+                reload_config()
                 if RICH:
                     for p in list_providers():
                         avail = "[green]available[/green]" if p["available"] else "[red]unavailable[/red]"
@@ -1110,10 +1311,17 @@ def main():
                 continue
 
             if user_input == "/verify-model":
+                reload_config()
+                active_provider = get_provider(None if os.environ.get("PROMPTOS_PROVIDER") == "auto" else os.environ.get("PROMPTOS_PROVIDER"))
                 print_model_verification(active_provider)
                 continue
 
+            if user_input.startswith("/llm-model"):
+                active_provider = handle_llm_model_command(user_input, active_provider)
+                continue
+
             if user_input.startswith("/switch"):
+                reload_config()
                 parts = user_input.split(None, 1)
                 if len(parts) < 2:
                     # cycle to next available
@@ -1313,6 +1521,8 @@ def main():
                 else:
                     print("\033[31mNo AI provider available.\033[0m")
                 continue
+
+            active_provider = route_openai_model_for_turn(active_provider, user_input)
 
             turn_history = history if persist_turn else history.copy()
             turn_history.append(Message("user", user_input))

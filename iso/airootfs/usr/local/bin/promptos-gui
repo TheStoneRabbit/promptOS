@@ -155,6 +155,8 @@ MODEL_ENV_BY_PROVIDER = {
     "ollama": "PROMPTOS_OLLAMA_MODEL",
 }
 PROMPTOS_CONFIG_PATH = "/etc/promptos/config"
+PROMPTOS_CONVERSATION_MODEL = os.environ.get("PROMPTOS_CONVERSATION_MODEL", "gpt-4.1")
+PROMPTOS_EDIT_MODEL = os.environ.get("PROMPTOS_EDIT_MODEL", "gpt-5-mini")
 MODEL_CATALOG_HINTS = {
     "openai": ["gpt-5-nano", "gpt-5-mini", "gpt-5", "gpt-4.1"],
     "claude": ["claude-sonnet-4-6", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
@@ -936,6 +938,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             self._add_assistant_message("No AI provider available. Configure keys or run local ollama.")
             return
 
+        self._route_openai_model_for_turn(text)
         self._add_user_message(text)
         self.history.append(Message("user", text))
         self.active_session_needs_title = True
@@ -1162,6 +1165,36 @@ class PromptOSWindow(Adw.ApplicationWindow):
         suffix = f" / {model}" if model else ""
         self.provider_badge.set_text(f"Provider: {name}{suffix}")
 
+    def _looks_like_file_edit_request(self, text: str) -> bool:
+        s = (text or "").lower()
+        edit_terms = (
+            "edit", "change", "modify", "update", "patch", "write", "create",
+            "add", "implement", "fix", "refactor", "rename", "remove", "delete",
+        )
+        target_terms = (
+            "file", "code", "repo", "script", "source", "config", "readme",
+            "agent", "prompt", ".py", ".sh", ".md", ".json", ".toml", ".yaml",
+            ".yml", ".css", ".html", ".js", ".ts", ".tsx", ".jsx",
+        )
+        if any(term in s for term in edit_terms) and any(term in s for term in target_terms):
+            return True
+        return any(term in s for term in ("apply_patch", "promptos-patch", "unified diff"))
+
+    def _route_openai_model_for_turn(self, user_input: str):
+        if not self.active_provider or self.active_provider.name != "openai":
+            return
+        conversation_model = os.environ.get("PROMPTOS_CONVERSATION_MODEL", PROMPTOS_CONVERSATION_MODEL)
+        edit_model = os.environ.get("PROMPTOS_EDIT_MODEL", PROMPTOS_EDIT_MODEL)
+        target = edit_model if self._looks_like_file_edit_request(user_input) else conversation_model
+        if getattr(self.active_provider, "model", "") == target:
+            return
+        os.environ["PROMPTOS_OPENAI_MODEL"] = target
+        provider = get_provider("openai")
+        if provider:
+            self.active_provider = provider
+            self._refresh_provider_badge()
+            self._refresh_system_message()
+
     def _handle_llm_model_command(self, cmd: str):
         parts = cmd.split()
         # /llm-model
@@ -1286,9 +1319,80 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 f.write("\n".join(lines).rstrip() + "\n")
             return "(persisted to /etc/promptos/config)"
         except PermissionError:
-            return "(not persisted: permission denied writing /etc/promptos/config)"
+            return self._persist_model_config_with_sudo(key, value)
         except Exception as e:
             return f"(not persisted: {e})"
+
+    def _persist_model_config_with_sudo(self, key: str, value: str) -> str:
+        if os.geteuid() == 0:
+            return "(not persisted: permission denied writing /etc/promptos/config)"
+
+        password = self._prompt_sudo_password()
+        if password is None:
+            return "(not persisted: sudo cancelled by user)"
+
+        askpass_path = None
+        script = r'''
+import os
+import sys
+
+path, key, value = sys.argv[1:4]
+lines = []
+found = False
+
+if os.path.exists(path):
+    with open(path) as f:
+        for raw in f:
+            line = raw.rstrip("\n")
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                existing_key = stripped.split("=", 1)[0].strip()
+                if existing_key == key:
+                    lines.append(f"{key}={value}")
+                    found = True
+                    continue
+            lines.append(line)
+
+if not found:
+    lines.append(f"{key}={value}")
+
+os.makedirs(os.path.dirname(path), exist_ok=True)
+tmp_path = f"{path}.tmp"
+with open(tmp_path, "w") as f:
+    f.write("\n".join(lines).rstrip() + "\n")
+os.chmod(tmp_path, 0o644)
+os.replace(tmp_path, path)
+'''
+        env = os.environ.copy()
+        env["PROMPTOS_SUDO_PASS"] = password
+        try:
+            askpass_path = self._create_askpass_helper()
+            env["SUDO_ASKPASS"] = askpass_path
+            result = subprocess.run(
+                ["sudo", "-A", sys.executable, "-c", script, PROMPTOS_CONFIG_PATH, key, value],
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=30,
+            )
+        except FileNotFoundError as e:
+            return f"(not persisted: {e})"
+        except subprocess.TimeoutExpired:
+            return "(not persisted: sudo timed out)"
+        finally:
+            if askpass_path:
+                try:
+                    os.remove(askpass_path)
+                except OSError:
+                    pass
+
+        if result.returncode == 0:
+            return "(persisted to /etc/promptos/config with sudo)"
+        output = " ".join((result.stdout or "").split())
+        if not output:
+            output = f"sudo exited {result.returncode}"
+        return f"(not persisted: {output})"
 
     def _list_possible_models(self, provider: str | None):
         if provider and provider not in MODEL_ENV_BY_PROVIDER:

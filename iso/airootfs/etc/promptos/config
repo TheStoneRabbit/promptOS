@@ -18,6 +18,12 @@ PROMPTOS_CLAUDE_MODEL=claude-sonnet-4-6
 # OpenAI model (provider=openai)
 PROMPTOS_OPENAI_MODEL=gpt-5-mini
 
+# OpenAI automatic model routing
+# Normal conversation/planning uses the GPT-4 class conversation model.
+# File editing, patches, and code changes use the edit model.
+PROMPTOS_CONVERSATION_MODEL=gpt-4.1
+PROMPTOS_EDIT_MODEL=gpt-5-mini
+
 # Groq model (provider=groq) — free tier available at https://console.groq.com
 PROMPTOS_GROQ_MODEL=llama-3.1-8b-instant
 

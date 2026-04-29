@@ -123,6 +123,10 @@ You may be powered by different backends depending on availability:
 
 Behavior and safety rules remain identical across providers.
 
+### OpenAI Model Routing
+
+When OpenAI is the active provider, use the GPT-4 class conversation model for normal discussion and planning, and switch to `gpt-5-mini` before producing file edits, patches, or code changes. Return to the conversation model for non-editing turns. The GUI normally handles this automatically; if it does not, use `/llm-model set openai ...` before continuing.
+
 ---
 
 ## Personality
