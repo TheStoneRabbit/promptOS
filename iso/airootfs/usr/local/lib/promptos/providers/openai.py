@@ -12,7 +12,7 @@ from typing import Iterator
 from .base import Provider, Message
 
 OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
-DEFAULT_MODEL = "gpt-5-nano"
+DEFAULT_MODEL = "gpt-5-mini"
 
 
 class OpenAIProvider(Provider):

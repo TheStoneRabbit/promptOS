@@ -761,7 +761,13 @@ def _local_ip() -> str | None:
         s.close()
 
 
-def print_banner(provider_name: str | None):
+def _provider_model(provider) -> str:
+    return getattr(provider, "model", "") if provider else ""
+
+
+def print_banner(provider):
+    provider_name = provider.name if provider else None
+    model = _provider_model(provider)
     try:
         logo = subprocess.check_output(
             ["figlet", "-f", "standard", "promptOS"], text=True, stderr=subprocess.DEVNULL
@@ -774,10 +780,11 @@ def print_banner(provider_name: str | None):
     if RICH:
         color = PROVIDER_COLORS.get(provider_name, "bold white") if provider_name else "bold white"
         provider_str = f"[{color}]{provider_name}[/{color}]" if provider_name else "[yellow]no provider[/yellow]"
+        model_str = f"  •  model: [dim]{model}[/dim]" if model else ""
         net_str = f"[bold green]{ip}[/bold green]" if ip else "[yellow]offline[/yellow]"
         console.print(f"[bold cyan]{logo}[/bold cyan]", end="")
         console.print(Panel(
-            f"[dim]AI-Native Linux[/dim]  •  provider: {provider_str}  •  ip: {net_str}\n"
+            f"[dim]AI-Native Linux[/dim]  •  provider: {provider_str}{model_str}  •  ip: {net_str}\n"
             f"[dim]/help for commands  •  !cmd for bash  •  exit to quit[/dim]",
             border_style="dim",
             box=box.ROUNDED,
@@ -785,8 +792,9 @@ def print_banner(provider_name: str | None):
     else:
         print(f"\033[1;36m{logo}\033[0m")
         status = f"\033[1;32m{provider_name}\033[0m" if provider_name else "\033[33mno provider\033[0m"
+        model_str = f"  |  model: {model}" if model else ""
         net = f"\033[1;32m{ip}\033[0m" if ip else "\033[33moffline\033[0m"
-        print(f"  AI-Native Linux  |  provider: {status}  |  ip: {net}")
+        print(f"  AI-Native Linux  |  provider: {status}{model_str}  |  ip: {net}")
         print("  /help for commands  |  !cmd to run bash directly  |  exit to quit\n")
 
 
@@ -795,6 +803,7 @@ def print_help():
         console.print(Panel(
             "[bold]promptsh commands[/bold]\n\n"
             "  [cyan]/providers[/cyan]         — list all providers and status\n"
+            "  [cyan]/verify-model[/cyan]      — show the active provider/model in use\n"
             "  [cyan]/switch \\<name>[/cyan]     — switch provider (claude, openai, groq, ollama)\n"
             "  [cyan]/clear[/cyan]             — clear conversation history\n"
             "  [cyan]/history[/cyan]           — show conversation history\n"
@@ -820,6 +829,7 @@ def print_help():
         print("""
   promptsh commands:
     /providers          — list all providers and their status
+    /verify-model       — show the active provider/model in use
     /switch <name>      — switch active provider (claude, openai, groq, ollama)
     /clear              — clear conversation history
     /history            — show conversation history
@@ -838,6 +848,40 @@ def print_help():
     !!<prompt>          — send to AI and auto-run any commands it suggests
     exit / quit         — exit promptsh
 """)
+
+
+def print_model_verification(active_provider):
+    if not active_provider:
+        if RICH:
+            console.print("  [yellow]No active provider.[/yellow]\n")
+        else:
+            print("  No active provider.\n")
+        return
+
+    active_name = active_provider.name
+    active_model = _provider_model(active_provider) or "(unknown)"
+    override = os.environ.get("PROMPTOS_PROVIDER", "auto")
+
+    lines = [
+        "Model verification:",
+        f"  active provider: {active_name}",
+        f"  active model:    {active_model}",
+        f"  provider config: {override}",
+        f"  available:       {'yes' if active_provider.available() else 'no'}",
+        "",
+        "Configured models:",
+    ]
+    for p in list_providers():
+        marker = " *" if p["name"] == active_name else "  "
+        status = "available" if p["available"] else "unavailable"
+        model = p.get("model") or "(unset)"
+        lines.append(f"{marker} {p['name']:8} {model} ({status})")
+
+    text = "\n".join(lines)
+    if RICH:
+        console.print(Panel(text, title="Verify Model", border_style="green", box=box.ROUNDED))
+    else:
+        print(text + "\n")
 
 
 def _short_cwd() -> str:
@@ -972,7 +1016,7 @@ def main():
     override = os.environ.get("PROMPTOS_PROVIDER")
     provider = get_provider(None if override == "auto" else override)
 
-    print_banner(provider.name if provider else None)
+    print_banner(provider)
 
     # If ollama is the active provider but the model isn't downloaded yet,
     # show a clear notice with the path to fix it.
@@ -1052,15 +1096,21 @@ def main():
                 if RICH:
                     for p in list_providers():
                         avail = "[green]available[/green]" if p["available"] else "[red]unavailable[/red]"
+                        model = f" [dim]{p['model']}[/dim]" if p.get("model") else ""
                         active = " [yellow](active)[/yellow]" if active_provider and p["name"] == active_provider.name else ""
-                        console.print(f"  [bold]{p['name']:10}[/bold] {avail}{active}")
+                        console.print(f"  [bold]{p['name']:10}[/bold] {avail}{model}{active}")
                     console.print()
                 else:
                     for p in list_providers():
                         status = "\033[1;32mavailable\033[0m" if p["available"] else "\033[31munavailable\033[0m"
+                        model = f" {p['model']}" if p.get("model") else ""
                         active = " \033[1;33m(active)\033[0m" if active_provider and p["name"] == active_provider.name else ""
-                        print(f"  {p['name']:10} {status}{active}")
+                        print(f"  {p['name']:10} {status}{model}{active}")
                     print()
+                continue
+
+            if user_input == "/verify-model":
+                print_model_verification(active_provider)
                 continue
 
             if user_input.startswith("/switch"):
@@ -1090,10 +1140,12 @@ def main():
                     continue
                 if new_p:
                     active_provider = new_p
+                    model = _provider_model(active_provider)
+                    model_suffix = f" ({model})" if model else ""
                     if RICH:
-                        console.print(f"  Switched to [bold green]{name}[/bold green]\n")
+                        console.print(f"  Switched to [bold green]{name}[/bold green]{model_suffix}\n")
                     else:
-                        print(f"  Switched to \033[1;32m{name}\033[0m\n")
+                        print(f"  Switched to \033[1;32m{name}\033[0m{model_suffix}\n")
                 else:
                     if RICH:
                         console.print(f"  [red]{name} is not available (check API key or service)[/red]\n")

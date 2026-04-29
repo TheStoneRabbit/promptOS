@@ -53,6 +53,7 @@ FILES=(
     usr/local/bin/promptos-keys
     usr/local/bin/promptos-wifi
     usr/local/bin/promptos-model
+    usr/local/bin/promptos-patch
     usr/local/bin/promptos-gui
     usr/local/bin/promptos-warmup
     usr/local/bin/promptos-install
@@ -107,6 +108,7 @@ chmod 755 /usr/local/bin/promptsh \
           /usr/local/bin/promptos-keys \
           /usr/local/bin/promptos-wifi \
           /usr/local/bin/promptos-model \
+          /usr/local/bin/promptos-patch \
           /usr/local/bin/promptos-gui \
           /usr/local/bin/promptos-warmup \
           /usr/local/bin/promptos-install 2>/dev/null || true

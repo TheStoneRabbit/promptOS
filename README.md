@@ -126,6 +126,21 @@ What it leaves alone (your per-machine state):
 Promptsh changes apply on next login (`exit` and reconnect).
 Console-font changes apply on next boot, or run `setfont $(awk -F= '/^FONT/{print $2}' /etc/vconsole.conf)`.
 
+### Safe file edits
+
+promptOS includes `promptos-patch`, a small unified-diff applier for agent-driven
+file edits. Prefer it over generated `sed -i` chains:
+
+```bash
+promptos-patch <<'PATCH'
+--- a/path/to/file
++++ b/path/to/file
+@@ -1,1 +1,1 @@
+-old text
++new text
+PATCH
+```
+
 ---
 
 ## AI Providers
@@ -135,7 +150,7 @@ Auto-selected at boot in priority order:
 | Provider | Requires | Model |
 |----------|----------|-------|
 | `claude` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
-| `openai` | `OPENAI_API_KEY` | `gpt-5-nano` |
+| `openai` | `OPENAI_API_KEY` | `gpt-5-mini` |
 | `groq` | `GROQ_API_KEY` (free at console.groq.com) | `llama-3.1-8b-instant` |
 | `ollama` | Nothing (baked in) | `mistral:7b-instruct` (offline) |
 
@@ -197,6 +212,7 @@ promptOS/
 │       ├── etc/systemd/               # ollama, warmup, network services
 │       ├── usr/local/bin/promptsh     # AI shell
 │       ├── usr/local/bin/promptos-install  # disk installer
+│       ├── usr/local/bin/promptos-patch    # safe unified-diff file edits
 │       ├── usr/local/bin/promptos-warmup   # Ollama model pre-loader
 │       └── usr/local/lib/promptos/    # provider library
 │           ├── AGENT.md               # AI identity and ruleset (system prompt)

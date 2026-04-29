@@ -34,7 +34,7 @@ _MODEL_ENV = {
 
 _MODEL_DEFAULT = {
     "claude": "claude-sonnet-4-6",
-    "openai": "gpt-5-nano",
+    "openai": "gpt-5-mini",
     "groq": "llama-3.1-8b-instant",
     "ollama": "mistral:7b-instruct",
 }
@@ -92,6 +92,7 @@ def list_providers() -> list[dict]:
         results.append({
             "name": p.name,
             "available": p.available(),
+            "model": getattr(p, "model", ""),
         })
     return results
 

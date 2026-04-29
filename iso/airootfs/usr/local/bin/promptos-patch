@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""
+promptos-patch — apply unified diffs safely from stdin or a file.
+
+Usage:
+  promptos-patch < changes.diff
+  promptos-patch --check < changes.diff
+  promptos-patch --backup < changes.diff
+
+Designed for promptOS agents: use one heredoc command containing a unified diff
+instead of fragile sed chains for file edits.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import re
+import shutil
+import sys
+import tempfile
+
+
+HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+class PatchError(Exception):
+    pass
+
+
+class Hunk:
+    def __init__(self, old_start: int, old_count: int, new_start: int, new_count: int):
+        self.old_start = old_start
+        self.old_count = old_count
+        self.new_start = new_start
+        self.new_count = new_count
+        self.lines: list[tuple[str, str]] = []
+
+
+class FilePatch:
+    def __init__(self, old_path: str, new_path: str):
+        self.old_path = old_path
+        self.new_path = new_path
+        self.hunks: list[Hunk] = []
+
+    @property
+    def path(self) -> Path:
+        raw = self.new_path if self.new_path != "/dev/null" else self.old_path
+        if raw.startswith("a/") or raw.startswith("b/"):
+            raw = raw[2:]
+        return Path(raw)
+
+    @property
+    def is_create(self) -> bool:
+        return self.old_path == "/dev/null"
+
+    @property
+    def is_delete(self) -> bool:
+        return self.new_path == "/dev/null"
+
+
+def parse_patch(text: str) -> list[FilePatch]:
+    lines = text.splitlines(keepends=True)
+    patches: list[FilePatch] = []
+    current: FilePatch | None = None
+    current_hunk: Hunk | None = None
+    old_remaining = 0
+    new_remaining = 0
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+        if current_hunk is not None and (old_remaining > 0 or new_remaining > 0):
+            if line.startswith((" ", "+", "-")):
+                op = line[0]
+                if op in (" ", "-"):
+                    old_remaining -= 1
+                if op in (" ", "+"):
+                    new_remaining -= 1
+                if old_remaining < 0 or new_remaining < 0:
+                    raise PatchError("Hunk has more changed lines than its header allows")
+                current_hunk.lines.append((op, line[1:]))
+                i += 1
+                continue
+            if line.startswith("\\ No newline at end of file"):
+                i += 1
+                continue
+            raise PatchError(f"Invalid hunk line: {line.rstrip()}")
+
+        if current_hunk is not None:
+            current_hunk = None
+
+        if line.startswith("--- "):
+            if i + 1 >= len(lines) or not lines[i + 1].startswith("+++ "):
+                raise PatchError("Found '---' header without matching '+++' header")
+            old_path = line[4:].strip().split("\t", 1)[0]
+            new_path = lines[i + 1][4:].strip().split("\t", 1)[0]
+            current = FilePatch(old_path, new_path)
+            patches.append(current)
+            current_hunk = None
+            i += 2
+            continue
+
+        if line.startswith("@@ "):
+            if current is None:
+                raise PatchError("Found hunk before file header")
+            match = HUNK_RE.match(line)
+            if not match:
+                raise PatchError(f"Invalid hunk header: {line.rstrip()}")
+            old_count = int(match.group(2) or "1")
+            new_count = int(match.group(4) or "1")
+            current_hunk = Hunk(
+                int(match.group(1)),
+                old_count,
+                int(match.group(3)),
+                new_count,
+            )
+            current.hunks.append(current_hunk)
+            old_remaining = old_count
+            new_remaining = new_count
+            i += 1
+            continue
+        i += 1
+
+    if current_hunk is not None and (old_remaining > 0 or new_remaining > 0):
+        raise PatchError("Patch ended before final hunk was complete")
+
+    return patches
+
+
+def read_lines(path: Path, create: bool) -> list[str]:
+    if create:
+        return []
+    try:
+        with open(path, "r", newline="") as f:
+            return f.readlines()
+    except FileNotFoundError as e:
+        raise PatchError(f"{path}: file does not exist") from e
+
+
+def apply_file_patch(file_patch: FilePatch) -> tuple[Path, list[str] | None]:
+    path = file_patch.path
+    original = read_lines(path, file_patch.is_create)
+    output: list[str] = []
+    cursor = 0
+
+    for hunk in file_patch.hunks:
+        start = 0 if hunk.old_start == 0 else hunk.old_start - 1
+        if start < cursor:
+            raise PatchError(f"{path}: overlapping hunk at old line {hunk.old_start}")
+        if start > len(original):
+            raise PatchError(f"{path}: hunk starts past end of file at old line {hunk.old_start}")
+        output.extend(original[cursor:start])
+        cursor = start
+
+        for op, content in hunk.lines:
+            if op == " ":
+                if cursor >= len(original) or original[cursor] != content:
+                    got = original[cursor].rstrip("\n") if cursor < len(original) else "<EOF>"
+                    want = content.rstrip("\n")
+                    raise PatchError(
+                        f"{path}: context mismatch at line {cursor + 1}: expected {want!r}, got {got!r}"
+                    )
+                output.append(original[cursor])
+                cursor += 1
+            elif op == "-":
+                if cursor >= len(original) or original[cursor] != content:
+                    got = original[cursor].rstrip("\n") if cursor < len(original) else "<EOF>"
+                    want = content.rstrip("\n")
+                    raise PatchError(
+                        f"{path}: removal mismatch at line {cursor + 1}: expected {want!r}, got {got!r}"
+                    )
+                cursor += 1
+            elif op == "+":
+                output.append(content)
+
+    output.extend(original[cursor:])
+    if file_patch.is_delete:
+        return path, None
+    return path, output
+
+
+def write_atomic(path: Path, lines: list[str] | None, backup: bool):
+    if lines is None:
+        if backup and path.exists():
+            shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
+        path.unlink()
+        return
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode if path.exists() else None
+    if backup and path.exists():
+        shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", newline="") as f:
+            f.writelines(lines)
+        if mode is not None:
+            os.chmod(tmp_name, mode)
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Apply unified diffs safely.")
+    parser.add_argument("patch_file", nargs="?", help="Patch file; defaults to stdin")
+    parser.add_argument("--check", action="store_true", help="Validate patch without writing files")
+    parser.add_argument("--backup", action="store_true", help="Write .bak backups before changing files")
+    args = parser.parse_args()
+
+    try:
+        if args.patch_file:
+            text = Path(args.patch_file).read_text()
+        else:
+            text = sys.stdin.read()
+        if not text.strip():
+            raise PatchError("empty patch")
+
+        patches = parse_patch(text)
+        if not patches:
+            raise PatchError("no unified diff file headers found")
+
+        planned = [apply_file_patch(p) for p in patches]
+        if args.check:
+            for path, lines in planned:
+                action = "delete" if lines is None else "update"
+                print(f"[check] {action} {path}")
+            return 0
+
+        for path, lines in planned:
+            write_atomic(path, lines, args.backup)
+            action = "deleted" if lines is None else "patched"
+            print(f"[ok] {action} {path}")
+        return 0
+    except PatchError as e:
+        print(f"promptos-patch: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

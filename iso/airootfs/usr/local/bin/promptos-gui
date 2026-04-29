@@ -22,7 +22,11 @@ import getpass
 import time
 import tempfile
 import datetime
+import errno
+import pty
+import select
 from pathlib import Path
+from typing import Callable
 
 try:
     import gi
@@ -50,6 +54,7 @@ INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 STRONG_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 EM_RE = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 APP_CSS = b"""
 textview.code-block-view text {
@@ -502,12 +507,18 @@ class CommandCard(Gtk.Frame):
         self.state = Gtk.Label(label="Pending", xalign=0)
         self.state.add_css_class("dim-label")
 
+        self.progress = Gtk.ProgressBar()
+        self.progress.set_show_text(True)
+        self.progress.set_text("Waiting")
+        self.progress.set_visible(False)
+
         actions.append(run_btn)
         actions.append(skip_btn)
 
         box.append(title)
         box.append(cmd_label)
         box.append(actions)
+        box.append(self.progress)
         box.append(self.state)
         self.set_child(box)
 
@@ -527,6 +538,20 @@ class CommandCard(Gtk.Frame):
 
     def set_state(self, text: str):
         self.state.set_text(text)
+
+    def set_progress(self, text: str, fraction: float | None = None):
+        self.progress.set_visible(True)
+        if fraction is None:
+            self.progress.pulse()
+        else:
+            self.progress.set_fraction(max(0.0, min(1.0, fraction)))
+        self.progress.set_text(text)
+        self.state.set_text(text)
+        return False
+
+    def finish_progress(self):
+        self.progress.set_visible(False)
+        return False
 
     def set_run_as_default(self, window: Gtk.Window):
         self.run_btn.set_can_default(True)
@@ -955,6 +980,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 "- /clear\n"
                 "- /history\n"
                 "- /providers\n"
+                "- /verify-model\n"
                 "- /switch <provider>\n"
                 "- /llm-model show\n"
                 "- /llm-model set <provider> <model>\n"
@@ -1005,6 +1031,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
         if cmd.startswith("/llm-model"):
             self._handle_llm_model_command(cmd)
             return
+        if cmd == "/verify-model":
+            self._show_model_verification()
+            return
         if cmd.startswith("/save"):
             parts = cmd.split(" ", 1)
             name = parts[1].strip() if len(parts) > 1 and parts[1].strip() else ""
@@ -1037,7 +1066,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
             lines = []
             for p in list_providers():
                 status = "available" if p["available"] else "unavailable"
-                lines.append(f"- {p['name']}: {status}")
+                model = f" / {p['model']}" if p.get("model") else ""
+                lines.append(f"- {p['name']}: {status}{model}")
             self._add_assistant_message("Providers:\n" + "\n".join(lines))
             return
         if cmd.startswith("/autorun"):
@@ -1128,7 +1158,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
     def _refresh_provider_badge(self):
         name = self.active_provider.name if self.active_provider else "none"
-        self.provider_badge.set_text(f"Provider: {name}")
+        model = getattr(self.active_provider, "model", "") if self.active_provider else ""
+        suffix = f" / {model}" if model else ""
+        self.provider_badge.set_text(f"Provider: {name}{suffix}")
 
     def _handle_llm_model_command(self, cmd: str):
         parts = cmd.split()
@@ -1175,6 +1207,32 @@ class PromptOSWindow(Adw.ApplicationWindow):
             lines.append(f"- {provider}: {value}{active}")
         self._add_assistant_message("\n".join(lines))
 
+    def _show_model_verification(self):
+        if not self.active_provider:
+            self._add_assistant_message("No active provider.")
+            return
+
+        active_name = self.active_provider.name
+        active_model = getattr(self.active_provider, "model", "") or "(unknown)"
+        override = os.environ.get("PROMPTOS_PROVIDER", "auto")
+        available = "yes" if self.active_provider.available() else "no"
+
+        lines = [
+            "Model verification:",
+            f"- active provider: {active_name}",
+            f"- active model: {active_model}",
+            f"- provider config: {override}",
+            f"- available: {available}",
+            "",
+            "Configured models:",
+        ]
+        for p in list_providers():
+            marker = " *" if p["name"] == active_name else "  "
+            status = "available" if p["available"] else "unavailable"
+            model = p.get("model") or "(unset)"
+            lines.append(f"{marker} {p['name']}: {model} ({status})")
+        self._add_assistant_message("\n".join(lines))
+
     def _set_provider_model(self, provider_name: str, model: str):
         if provider_name not in MODEL_ENV_BY_PROVIDER:
             self._add_assistant_message(
@@ -1198,6 +1256,12 @@ class PromptOSWindow(Adw.ApplicationWindow):
                 return
             self._add_assistant_message(
                 f"Saved `{provider_name}` model as `{model}`, but provider is currently unavailable. {persist_msg}"
+            )
+            return
+        active = self.active_provider.name if self.active_provider else "none"
+        if active != provider_name:
+            self._add_assistant_message(
+                f"Set `{provider_name}` model to `{model}`. Active provider is still `{active}`; switch to `{provider_name}` to use it. {persist_msg}"
             )
             return
         self._add_assistant_message(f"Set `{provider_name}` model to `{model}`. {persist_msg}")
@@ -1377,6 +1441,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         card = self.pending_cards.get(command)
         if card:
             card.set_state("Running...")
+            card.set_progress("Starting...", None)
         self.command_running = True
 
         handled, code, output = self._maybe_handle_cd_command(command)
@@ -1385,7 +1450,15 @@ class PromptOSWindow(Adw.ApplicationWindow):
             return
 
         def _runner():
-            exit_code, output = self._run_shell_command(command)
+            def _progress(text: str, fraction: float | None = None):
+                current_card = self.pending_cards.get(command)
+                if current_card:
+                    GLib.idle_add(current_card.set_progress, text, fraction)
+
+            try:
+                exit_code, output = self._run_shell_command(command, progress_callback=_progress)
+            except Exception as e:
+                exit_code, output = 1, f"Command runner error: {e}"
             GLib.idle_add(self._on_card_finished, command, exit_code, output)
 
         threading.Thread(target=_runner, daemon=True).start()
@@ -1916,7 +1989,11 @@ class PromptOSWindow(Adw.ApplicationWindow):
         cleaned = " ".join((text or "").split())
         self._set_suggested_next_items([cleaned] if cleaned else [])
 
-    def _run_shell_command(self, command: str) -> tuple[int, str]:
+    def _run_shell_command(
+        self,
+        command: str,
+        progress_callback: Callable[[str, float | None], None] | None = None,
+    ) -> tuple[int, str]:
         # Detach common GUI launch commands so they don't block the queue.
         detached = self._maybe_detach_gui_command(command)
         if detached is not None:
@@ -1944,53 +2021,146 @@ class PromptOSWindow(Adw.ApplicationWindow):
             run_args = ["bash", "-lc", command]
 
         try:
-            proc = subprocess.run(
-                run_args,
-                text=True,
-                capture_output=True,
-                cwd=self.current_cwd,
-                env=env,
-            )
+            returncode, output = self._run_process_streaming(run_args, env, progress_callback)
         finally:
             if askpass_path:
                 try:
                     os.remove(askpass_path)
                 except OSError:
                     pass
-        output = (proc.stdout or "") + (proc.stderr or "")
-        if len(output) > 6000:
-            output = output[:6000] + "\n...[truncated]..."
+
         if (
-            proc.returncode != 0
+            returncode != 0
             and not (needs_sudo or has_inline_sudo)
             and os.geteuid() != 0
             and self._should_retry_with_sudo(command, output)
         ):
             password = self._prompt_sudo_password()
             if password is None:
-                return proc.returncode, output + "\n\nsudo cancelled by user"
+                return returncode, output + "\n\nsudo cancelled by user"
             askpass_path = self._create_askpass_helper()
             env_retry = os.environ.copy()
             env_retry["SUDO_ASKPASS"] = askpass_path
             env_retry["PROMPTOS_SUDO_PASS"] = password
             try:
-                retry = subprocess.run(
+                if progress_callback:
+                    progress_callback("Retrying with sudo...", None)
+                retry_code, retry_output = self._run_process_streaming(
                     ["sudo", "-A", "bash", "-lc", command],
-                    text=True,
-                    capture_output=True,
-                    cwd=self.current_cwd,
-                    env=env_retry,
+                    env_retry,
+                    progress_callback,
                 )
             finally:
                 try:
                     os.remove(askpass_path)
                 except OSError:
                     pass
-            output = (retry.stdout or "") + (retry.stderr or "")
-            if len(output) > 6000:
-                output = output[:6000] + "\n...[truncated]..."
-            return retry.returncode, output
-        return proc.returncode, output
+            return retry_code, retry_output
+        return returncode, output
+
+    def _run_process_streaming(
+        self,
+        run_args: list[str],
+        env: dict[str, str],
+        progress_callback: Callable[[str, float | None], None] | None = None,
+    ) -> tuple[int, str]:
+        if progress_callback:
+            progress_callback("Running...", None)
+        output_parts: list[str] = []
+        last_progress = 0.0
+        master_fd = -1
+        slave_fd = -1
+        try:
+            master_fd, slave_fd = pty.openpty()
+            proc = subprocess.Popen(
+                run_args,
+                stdin=subprocess.DEVNULL,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                cwd=self.current_cwd,
+                env=env,
+                close_fds=True,
+            )
+            os.close(slave_fd)
+            slave_fd = -1
+
+            pending = ""
+            while True:
+                ready, _, _ = select.select([master_fd], [], [], 0.2)
+                if master_fd in ready:
+                    try:
+                        chunk = os.read(master_fd, 4096)
+                    except OSError as e:
+                        if e.errno == errno.EIO:
+                            break
+                        raise
+                    if not chunk:
+                        break
+                    text = chunk.decode(errors="replace")
+                    output_parts.append(text)
+                    pending += text
+                    segments = re.split(r"[\r\n]+", pending)
+                    pending = segments.pop() if segments else ""
+                    for segment in segments:
+                        if self._emit_progress_update(segment, progress_callback, last_progress):
+                            last_progress = time.monotonic()
+                elif proc.poll() is not None:
+                    break
+
+            if pending:
+                self._emit_progress_update(pending, progress_callback, last_progress)
+            returncode = proc.wait()
+        finally:
+            for fd in (slave_fd, master_fd):
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+
+        output = "".join(output_parts)
+        if len(output) > 6000:
+            output = output[:6000] + "\n...[truncated]..."
+        if progress_callback:
+            progress_callback(f"Finished with exit {returncode}", 1.0 if returncode == 0 else None)
+        return returncode, output
+
+    def _emit_progress_update(
+        self,
+        text: str,
+        progress_callback: Callable[[str, float | None], None] | None,
+        last_progress: float,
+    ) -> bool:
+        if not progress_callback:
+            return False
+        progress = self._progress_from_output(text)
+        now = time.monotonic()
+        if progress is not None:
+            label, fraction = progress
+            progress_callback(label, fraction)
+            return True
+        elif now - last_progress >= 0.4:
+            progress_callback(self._progress_label_from_output(text), None)
+            return True
+        return False
+
+    def _progress_from_output(self, text: str) -> tuple[str, float] | None:
+        text = ANSI_RE.sub("", text or "")
+        cleaned = self._progress_label_from_output(text)
+        matches = re.findall(r"(?<!\d)(100|[1-9]?\d)(?:\.\d+)?%", text)
+        if not matches:
+            return None
+        percent = int(matches[-1])
+        return f"{cleaned} ({percent}%)", percent / 100.0
+
+    def _progress_label_from_output(self, text: str) -> str:
+        text = ANSI_RE.sub("", text or "")
+        cleaned = " ".join((text or "").replace("\r", "\n").split())
+        if not cleaned:
+            return "Running..."
+        if len(cleaned) > 90:
+            cleaned = cleaned[:87].rstrip() + "..."
+        return cleaned
 
     def _maybe_detach_gui_command(self, command: str) -> str | None:
         cmd = (command or "").strip()
