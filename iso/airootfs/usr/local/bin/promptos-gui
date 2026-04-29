@@ -92,6 +92,14 @@ button.send-btn {
   background-color: #1b8f3e;
   color: #ffffff;
 }
+button.close-btn {
+  background-color: #000000;
+  color: #ffffff;
+  border-radius: 999px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+}
 button.stop-btn:disabled {
   background-color: rgba(120, 120, 120, 0.4);
   color: rgba(240, 240, 240, 0.8);
@@ -239,6 +247,11 @@ class ChatBubble(Gtk.Box):
         s = lines[idx + 1].strip()
         if "|" not in h or "|" not in s:
             return False
+        # Require both header and separator to look like real markdown table rows.
+        if not (h.startswith("|") and h.endswith("|")):
+            return False
+        if not (s.startswith("|") and s.endswith("|")):
+            return False
         # separator like |---|:---:|---:|
         sep = s.replace("|", "").replace(":", "").replace("-", "").strip()
         return sep == ""
@@ -263,6 +276,14 @@ class ChatBubble(Gtk.Box):
         if not rows:
             return
         col_count = max(len(r) for r in rows)
+
+        # Safety guards: if this isn't a sane table, fall back to plain text.
+        MAX_TABLE_ROWS = 24
+        MAX_TABLE_COLS = 8
+        if len(rows) > MAX_TABLE_ROWS or col_count > MAX_TABLE_COLS:
+            for line in table_lines:
+                self._append_inline_markup_label(parent, line)
+            return
 
         frame = Gtk.Frame()
         frame.add_css_class("code-block")
@@ -584,7 +605,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         topbar.append(new_btn)
 
         close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
-        close_btn.add_css_class("promptos-btn")
+        close_btn.add_css_class("close-btn")
         close_btn.set_tooltip_text("Close promptOS")
         close_btn.connect("clicked", lambda *_: self.close())
         topbar.append(close_btn)
@@ -1426,7 +1447,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             title_lbl.set_ellipsize(Pango.EllipsizeMode.END)
             title_lbl.set_wrap(False)
             title_lbl.set_hexpand(True)
-            delete_btn = Gtk.Button(label="X")
+            delete_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
             delete_btn.add_css_class("neutral-btn")
             delete_btn.set_size_request(22, 22)
             delete_btn.set_margin_start(4)
