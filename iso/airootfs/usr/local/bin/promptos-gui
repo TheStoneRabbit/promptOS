@@ -195,7 +195,19 @@ class ChatBubble(Gtk.Box):
 
     def _append_markdown_text(self, parent: Gtk.Box, text: str):
         lines = text.splitlines() or [text]
-        for line in lines:
+        i = 0
+        while i < len(lines):
+            # Detect GitHub-style markdown table blocks:
+            # header row, separator row, then data rows.
+            if self._looks_like_table_header(lines, i):
+                end = i + 2
+                while end < len(lines) and "|" in lines[end]:
+                    end += 1
+                self._append_table(parent, lines[i:end])
+                i = end
+                continue
+
+            line = lines[i]
             heading = HEADING_RE.match(line)
             if heading:
                 lbl = Gtk.Label(xalign=0)
@@ -206,15 +218,74 @@ class ChatBubble(Gtk.Box):
                 lbl.set_text(heading.group(2).strip())
                 lbl.add_css_class("md-heading")
                 parent.append(lbl)
+                i += 1
                 continue
 
             if line.strip().startswith(("- ", "* ")):
                 self._append_inline_markup_label(parent, f"• {line.strip()[2:].strip()}")
+                i += 1
                 continue
             if re.match(r"^\d+\.\s+", line.strip()):
                 self._append_inline_markup_label(parent, line.strip())
+                i += 1
                 continue
             self._append_inline_markup_label(parent, line)
+            i += 1
+
+    def _looks_like_table_header(self, lines: list[str], idx: int) -> bool:
+        if idx + 1 >= len(lines):
+            return False
+        h = lines[idx].strip()
+        s = lines[idx + 1].strip()
+        if "|" not in h or "|" not in s:
+            return False
+        # separator like |---|:---:|---:|
+        sep = s.replace("|", "").replace(":", "").replace("-", "").strip()
+        return sep == ""
+
+    def _append_table(self, parent: Gtk.Box, table_lines: list[str]):
+        rows = [self._parse_table_row(line) for line in table_lines if line.strip()]
+        if len(rows) < 2:
+            for line in table_lines:
+                self._append_inline_markup_label(parent, line)
+            return
+
+        # Drop separator row (2nd row)
+        rows = [rows[0]] + rows[2:]
+        if not rows:
+            return
+        col_count = max(len(r) for r in rows)
+
+        frame = Gtk.Frame()
+        frame.add_css_class("code-block")
+        grid = Gtk.Grid()
+        grid.set_row_spacing(4)
+        grid.set_column_spacing(10)
+        grid.set_margin_top(8)
+        grid.set_margin_bottom(8)
+        grid.set_margin_start(10)
+        grid.set_margin_end(10)
+
+        for r, row in enumerate(rows):
+            for c in range(col_count):
+                val = row[c] if c < len(row) else ""
+                lbl = Gtk.Label(xalign=0)
+                lbl.set_selectable(True)
+                lbl.set_wrap(True)
+                lbl.set_wrap_mode(Gtk.WrapMode.CHAR)
+                lbl.set_max_width_chars(28)
+                if r == 0:
+                    lbl.add_css_class("heading")
+                lbl.set_text(val)
+                grid.attach(lbl, c, r, 1, 1)
+
+        frame.set_child(grid)
+        parent.append(frame)
+
+    def _parse_table_row(self, line: str) -> list[str]:
+        raw = line.strip().strip("|")
+        cells = [c.strip() for c in raw.split("|")]
+        return cells
 
     def _append_inline_markup_label(self, parent: Gtk.Box, text: str):
         # Escape for Pango markup, then apply simple inline markdown.
