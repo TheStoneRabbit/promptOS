@@ -135,7 +135,7 @@ Auto-selected at boot in priority order:
 | Provider | Requires | Model |
 |----------|----------|-------|
 | `claude` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
-| `openai` | `OPENAI_API_KEY` | `gpt-4.1` |
+| `openai` | `OPENAI_API_KEY` | `gpt-5-nano` |
 | `groq` | `GROQ_API_KEY` (free at console.groq.com) | `llama-3.1-8b-instant` |
 | `ollama` | Nothing (baked in) | `mistral:7b-instruct` (offline) |
 

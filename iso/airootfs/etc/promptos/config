@@ -15,11 +15,8 @@ PROMPTOS_OLLAMA_BASE_URL=http://localhost:11434
 # Claude model (provider=claude)
 PROMPTOS_CLAUDE_MODEL=claude-sonnet-4-6
 
-# OpenAI model (provider=openai) — gpt-4.1 is tuned for agentic file editing
-# and tool use; much stronger at multi-step coding tasks than gpt-4o.
-# Other good options: gpt-5 (best quality, slower/pricier), o4-mini (deep
-# reasoning, slow), codex-mini-latest (fast code-focused).
-PROMPTOS_OPENAI_MODEL=gpt-4.1
+# OpenAI model (provider=openai)
+PROMPTOS_OPENAI_MODEL=gpt-5-nano
 
 # Groq model (provider=groq) — free tier available at https://console.groq.com
 PROMPTOS_GROQ_MODEL=llama-3.1-8b-instant

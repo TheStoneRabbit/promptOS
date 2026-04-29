@@ -151,7 +151,7 @@ MODEL_ENV_BY_PROVIDER = {
 }
 PROMPTOS_CONFIG_PATH = "/etc/promptos/config"
 MODEL_CATALOG_HINTS = {
-    "openai": ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o"],
+    "openai": ["gpt-5-nano", "gpt-5-mini", "gpt-5", "gpt-4.1"],
     "claude": ["claude-sonnet-4-6", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
     "groq": ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
 }
@@ -560,6 +560,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._cancelled_generations: set[int] = set()
         self._gui_exec_cache: set[str] | None = None
         self.active_session_name: str | None = None
+        self.active_session_title = "New Chat"
+        self.active_session_needs_title = False
 
         self._load_env_config()
         self._install_css()
@@ -801,6 +803,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._refresh_provider_badge()
 
     def _new_chat(self):
+        self._finalize_active_session_title()
         system_prompt = (self._load_gui_agent_prompt() + self._build_runtime_context()).strip()
         self.history = [
             Message(
@@ -810,8 +813,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
         ]
         self.pending_cards.clear()
         self.current_assistant_bubble = None
-        self.active_session_name = "New Chat"
-        self._refresh_sessions()  # Ensure new chat shows as recent session
+        self.active_session_name = self._new_session_name()
+        self.active_session_title = "New Chat"
+        self.active_session_needs_title = True
         # --PROMPTOS NEW CHAT SESSION PATCH HERE--
         self._set_suggested_next("Ask about system status, logs, networking, or package updates.")
 
@@ -828,6 +832,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             child = nxt
 
         self._add_assistant_message("New chat started. Ask anything about this system.")
+        self._autosave_current_session()
 
     def _clear_chat_view(self):
         child = self.chat_list.get_first_child()
@@ -908,6 +913,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
         self._add_user_message(text)
         self.history.append(Message("user", text))
+        self.active_session_needs_title = True
+        self._autosave_current_session()
         self._refresh_system_message()
         self._set_input_enabled(False)
         self._generation_seq += 1
@@ -1085,6 +1092,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._add_assistant_message(message)
         self._set_input_enabled(True)
         self._request_suggested_next_async()
+        self._autosave_current_session()
         return False
 
     def _update_streaming_bubble(self, generation_id: int, text: str):
@@ -1109,6 +1117,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._parse_cmd_cards(response)
         self._request_suggested_next_async()
         self._refresh_provider_badge()
+        self._autosave_current_session()
         self._refresh_sessions()
         return False
 
@@ -1405,6 +1414,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._add_assistant_message(summary)
         self._request_command_followup_async(command, code, output)
         self._request_suggested_next_async()
+        self._autosave_current_session()
         self._start_next_queued_command()
         if not self.autorun_commands:
             self._focus_run_on_next_pending_card()
@@ -1459,6 +1469,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._add_assistant_message(response)
         self._parse_cmd_cards(response)
         self._request_suggested_next_async()
+        self._autosave_current_session()
         return False
 
     def _refresh_sessions(self):
@@ -1566,6 +1577,15 @@ class PromptOSWindow(Adw.ApplicationWindow):
             return summary
         return datetime.datetime.now().strftime("session-%Y%m%d-%H%M%S")
 
+    def _new_session_name(self) -> str:
+        base = datetime.datetime.now().strftime("session-%Y%m%d-%H%M%S")
+        candidate = base
+        suffix = 2
+        while self._session_path(candidate).exists():
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        return candidate
+
     def _safe_session_name(self, name: str) -> str:
         keep = "_-."
         out = "".join(c if (c.isalnum() or c in keep) else "_" for c in name).strip("_")
@@ -1576,20 +1596,10 @@ class PromptOSWindow(Adw.ApplicationWindow):
         sessions_dir.mkdir(parents=True, exist_ok=True)
         return sessions_dir / f"{self._safe_session_name(name)}.json"
 
-    def _save_current_session(self, name: str):
-        explicit_name = bool(name and name.strip())
-        # If this chat was already saved and user didn't provide a new explicit name,
-        # overwrite the same session file.
-        if self.active_session_name and not explicit_name:
-            target_name = self.active_session_name
-        else:
-            title = self._generate_session_title()
-            target_name = (name.strip() if explicit_name else "") or title or self._default_session_name()
-
-        path = self._session_path(name)
+    def _write_session(self, target_name: str, title: str, announce: bool = False) -> Path | None:
         messages = [{"role": m.role, "content": m.content} for m in self.history]
         data = {
-            "title": self._generate_session_title() or target_name,
+            "title": title,
             "messages": messages,
         }
         try:
@@ -1597,10 +1607,51 @@ class PromptOSWindow(Adw.ApplicationWindow):
             with open(path, "w") as f:
                 json.dump(data, f, indent=2)
             self.active_session_name = path.stem
-            self._add_assistant_message(f"Saved session `{path.stem}` ({len(messages)} messages).")
-            self._refresh_sessions()
+            self.active_session_title = title
+            if announce:
+                self._add_assistant_message(f"Saved session `{path.stem}` ({len(messages)} messages).")
+            return path
         except Exception as e:
-            self._add_assistant_message(f"Failed to save session `{target_name}`: {e}")
+            if announce:
+                self._add_assistant_message(f"Failed to save session `{target_name}`: {e}")
+            return None
+
+    def _autosave_current_session(self):
+        if not self.active_session_name:
+            self.active_session_name = self._new_session_name()
+        title = self.active_session_title or "New Chat"
+        self._write_session(self.active_session_name, title, announce=False)
+        self._refresh_sessions()
+
+    def _finalize_active_session_title(self):
+        if not self.active_session_name or not self.active_session_needs_title:
+            return
+        title = self._generate_session_title()
+        if not title:
+            return
+        if title == self.active_session_title:
+            self.active_session_needs_title = False
+            return
+        path = self._write_session(self.active_session_name, title, announce=False)
+        if path:
+            self.active_session_needs_title = False
+            self._refresh_sessions()
+
+    def _save_current_session(self, name: str):
+        explicit_name = bool(name and name.strip())
+        # If this chat was already saved and user didn't provide a new explicit name,
+        # overwrite the same session file.
+        if self.active_session_name and not explicit_name:
+            target_name = self.active_session_name
+            title = self.active_session_title or self._session_summary_from_history() or target_name
+        else:
+            title = self._generate_session_title()
+            target_name = (name.strip() if explicit_name else "") or title or self._default_session_name()
+
+        path = self._write_session(target_name, title or target_name, announce=True)
+        if path:
+            self.active_session_needs_title = False
+            self._refresh_sessions()
 
     def _show_sessions(self):
         sessions_dir = Path.home() / ".promptsh" / "sessions"
@@ -1712,7 +1763,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
             try:
                 path.unlink()
                 if self.active_session_name == name:
-                    self.active_session_name = "New Chat"
+                    self.active_session_name = None
+                    self.active_session_title = "New Chat"
+                    self.active_session_needs_title = True
         # --PROMPTOS NEW CHAT SESSION PATCH HERE--
             except Exception:
                 pass
@@ -1722,6 +1775,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         name = row.get_name()
         if not name:
             return
+        if name != self.active_session_name:
+            self._finalize_active_session_title()
         self._load_session(name)
 
     def _load_session(self, name: str):
@@ -1733,7 +1788,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
             self._add_assistant_message(f"Failed to load session '{name}': {e}")
             return
 
+        loaded_title = ""
         if isinstance(data, dict):
+            loaded_title = " ".join(str(data.get("title", "")).split()).strip()
             data = data.get("messages", [])
         if not isinstance(data, list):
             self._add_assistant_message(f"Session '{name}' has invalid format.")
@@ -1766,6 +1823,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.pending_cards.clear()
         self.current_assistant_bubble = None
         self.active_session_name = name
+        self.active_session_title = loaded_title or self._session_summary_from_history() or name
+        self.active_session_needs_title = False
         self._clear_chat_view()
 
         for msg in self.history:
