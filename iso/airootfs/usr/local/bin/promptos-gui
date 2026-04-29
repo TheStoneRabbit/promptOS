@@ -127,6 +127,9 @@ textview.composer-input-view {
   background-color: transparent;
   color: #e5e7eb;
 }
+label.cmd-suggestion-text {
+  color: #ff9f1c;
+}
 box.window-topbar {
   background-color: rgba(17, 24, 39, 0.72);
   border: 1px solid rgba(107, 114, 128, 0.45);
@@ -539,6 +542,7 @@ class CommandCard(Gtk.Frame):
         cmd_label.set_wrap(True)
         cmd_label.set_selectable(True)
         cmd_label.add_css_class("monospace")
+        cmd_label.add_css_class("cmd-suggestion-text")
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         run_btn = Gtk.Button(label="Run")
@@ -1327,14 +1331,16 @@ class PromptOSWindow(Adw.ApplicationWindow):
             payload = stripped[4:].strip()
             if payload.startswith("```"):
                 i += 1
+                block_lines: list[str] = []
                 while i < len(lines):
                     body = lines[i]
                     if body.strip().startswith("```"):
                         break
-                    candidate = self._normalize_command(body)
-                    if candidate:
-                        cmds.append(candidate)
+                    block_lines.append(body)
                     i += 1
+                candidate = self._normalize_command("\n".join(block_lines))
+                if candidate:
+                    cmds.append(candidate)
                 i += 1
                 continue
 
@@ -1346,6 +1352,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
     def _normalize_command(self, text: str) -> str:
         cmd = text.strip().strip("`").strip()
+        if "\n" in cmd:
+            # Multiline command blocks (e.g. heredocs) must be preserved as-is.
+            return cmd
         # Remove accidental unmatched trailing quote artifacts from model output,
         # while preserving valid balanced quoted commands.
         if cmd.endswith("'") and cmd.count("'") % 2 == 1:
