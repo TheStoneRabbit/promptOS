@@ -810,7 +810,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         ]
         self.pending_cards.clear()
         self.current_assistant_bubble = None
-        self.active_session_name = None
+        self.active_session_name = "New Chat"
+        # --PROMPTOS NEW CHAT SESSION PATCH HERE--
         self._set_suggested_next("Ask about system status, logs, networking, or package updates.")
 
         child = self.chat_list.get_first_child()
@@ -1710,7 +1711,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
             try:
                 path.unlink()
                 if self.active_session_name == name:
-                    self.active_session_name = None
+                    self.active_session_name = "New Chat"
+        # --PROMPTOS NEW CHAT SESSION PATCH HERE--
             except Exception:
                 pass
         self._refresh_sessions()
