@@ -49,6 +49,24 @@ python-gobject
 gtk4
 libadwaita
 
+# Graphical desktop (X11) — AI search-bar overlay + window control
+# X11 chosen over Wayland so the agent can focus windows and synthesize
+# keystrokes into other apps via xdotool/wmctrl (CMD: cards).
+xorg-server
+xorg-xinit
+xorg-xsetroot
+xorg-xset
+openbox
+wmctrl
+xdotool
+xterm
+ttf-dejavu
+tint2
+feh
+python-cairo
+python-pyxdg
+picom
+
 # Build tools (needed for pip installs)
 base-devel
 

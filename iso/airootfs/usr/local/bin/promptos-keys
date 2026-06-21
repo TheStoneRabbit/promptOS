@@ -164,8 +164,9 @@ def cmd_setup():
     print(f"Get a key at: {url}")
     print(f"Format looks like: {example}")
     print()
+    print("The key is shown as you type (there's no clipboard in the console).")
     try:
-        key = getpass.getpass(f"Paste your {provider} API key (input hidden): ").strip()
+        key = input(f"Type or paste your {provider} API key: ").strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return

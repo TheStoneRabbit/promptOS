@@ -11,7 +11,11 @@ echo "[promptOS] Running airootfs customization..."
 # models under /var/lib/ollama). No custom binary install or unit file needed.
 echo "[promptOS] Enabling pacman-installed ollama service..."
 systemctl enable ollama.service 2>/dev/null || true
-echo "[promptOS] Ollama installed; default model (mistral:7b-instruct) downloads on first run."
+# No model is baked into the ISO and none is auto-downloaded on boot
+# (ollama-warmup is intentionally NOT enabled). promptOS defaults to a cloud
+# provider; a local model is only fetched if you explicitly run
+# `promptos-model pull` or use the ollama provider.
+echo "[promptOS] Ollama service enabled; no local model is downloaded automatically."
 
 # ── Register promptsh as a valid login shell ─────────────────────────────────
 # PAM rejects logins (including SSH) whose shell isn't listed in /etc/shells.

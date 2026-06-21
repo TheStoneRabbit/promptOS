@@ -365,7 +365,7 @@ def setup_system(hostname: str, timezone: str, locale: str,
 
     # Enable services
     run(f"arch-chroot {MOUNTPOINT} systemctl enable NetworkManager sshd", check=False)
-    run(f"arch-chroot {MOUNTPOINT} systemctl enable ollama ollama-warmup", check=False)
+    run(f"arch-chroot {MOUNTPOINT} systemctl enable ollama", check=False)
 
     # Replace the live ISO's mkinitcpio.conf with a standard one for installed systems
     # The live ISO uses archiso hooks which look for the ISO label — that doesn't exist on disk
@@ -427,68 +427,14 @@ def install_bootloader():
         )
 
 
-def install_gnome():
-    """Install GNOME desktop and enable GDM. Requires internet because the
-    packages aren't on the live ISO — pacman pulls them from Arch mirrors."""
-    if not is_online():
-        if RICH:
-            console.print("[yellow]Skipping GNOME install — you're offline.[/yellow]")
-            console.print("[dim]Run later (after first boot, when online):[/dim]")
-            console.print("[dim]  pacman -S --noconfirm gnome gdm gnome-backgrounds && systemctl enable gdm[/dim]")
-        else:
-            print("Skipping GNOME install — you're offline.")
-            print("Run later: pacman -S --noconfirm gnome gdm gnome-backgrounds && systemctl enable gdm")
-        return
-
-    print_step(
-        "Installing GNOME",
-        "This pulls ~1.5 GB of packages from Arch mirrors and may take 10-20 minutes."
-    )
-    # Bind /etc/resolv.conf into the chroot so DNS works for pacman.
-    run(f"cp /etc/resolv.conf {MOUNTPOINT}/etc/resolv.conf", check=False)
-    # Refresh package databases first.
-    run(f"arch-chroot {MOUNTPOINT} pacman -Sy --noconfirm", check=False)
-    # Install gnome group + gdm + default backgrounds. `gnome-extra` is intentionally
-    # left out — it adds another ~3 GB of apps most users don't want.
-    rc = run(
-        f"arch-chroot {MOUNTPOINT} pacman -S --noconfirm gnome gdm gnome-backgrounds",
-        check=False,
-    )
-    if rc != 0:
-        if RICH:
-            console.print("[red]GNOME install failed.[/red] You can retry after first boot:")
-            console.print("[dim]  pacman -S --noconfirm gnome gdm gnome-backgrounds[/dim]")
-        else:
-            print("GNOME install failed. Retry after first boot:")
-            print("  pacman -S --noconfirm gnome gdm gnome-backgrounds")
-        return
-
-    # Enable GDM so it starts on boot.
-    run(f"arch-chroot {MOUNTPOINT} systemctl enable gdm.service", check=False)
-
-    # Compile the dconf db so the promptOS wallpaper becomes the default
-    # for all new GNOME sessions. (Existing users would need to re-login.)
-    run(f"arch-chroot {MOUNTPOINT} dconf update", check=False)
-
-    # Disable the TTY1 autologin override so GDM (on tty1) doesn't conflict
-    # with the bare-tty getty.
-    run(
-        f"rm -f {MOUNTPOINT}/etc/systemd/system/getty@tty1.service.d/autologin.conf",
-        check=False,
-    )
-
-    if RICH:
-        console.print("[green]GNOME installed and GDM enabled.[/green] Log in as your admin user.")
-    else:
-        print("GNOME installed and GDM enabled. Log in as your admin user.")
-
-
 def install_promptos():
     """Copy promptOS files into the installed system."""
     copies = [
         ("/usr/local/bin/promptsh",       f"{MOUNTPOINT}/usr/local/bin/promptsh"),
         ("/usr/local/bin/promptos-keys",  f"{MOUNTPOINT}/usr/local/bin/promptos-keys"),
         ("/usr/local/bin/promptos-gui",   f"{MOUNTPOINT}/usr/local/bin/promptos-gui"),
+        ("/usr/local/bin/promptos-firstboot", f"{MOUNTPOINT}/usr/local/bin/promptos-firstboot"),
+        ("/usr/local/bin/promptos-wallpaper", f"{MOUNTPOINT}/usr/local/bin/promptos-wallpaper"),
         ("/usr/local/bin/promptos-install", f"{MOUNTPOINT}/usr/local/bin/promptos-install"),
         ("/usr/local/lib/promptos",        f"{MOUNTPOINT}/usr/local/lib/promptos"),
         ("/etc/promptos",                  f"{MOUNTPOINT}/etc/promptos"),
@@ -504,15 +450,19 @@ def install_promptos():
             run(f"cp -a {src} {dst}", check=False)
 
     # Make scripts executable
-    for script in ["promptsh", "promptos-keys", "promptos-gui", "promptos-install"]:
+    for script in ["promptsh", "promptos-keys", "promptos-gui", "promptos-firstboot",
+                   "promptos-wallpaper", "promptos-install"]:
         path = f"{MOUNTPOINT}/usr/local/bin/{script}"
         if os.path.exists(path):
             os.chmod(path, 0o755)
 
-    # Set promptsh as root's login shell
-    run(f"arch-chroot {MOUNTPOINT} chsh -s /usr/local/bin/promptsh root", check=False)
+    # NOTE: root's login shell stays /bin/bash (as cloned from the live system).
+    # The graphical desktop is launched from /etc/profile.d/00-promptos-x.sh,
+    # which only runs for a bash login shell; bash.bashrc then drops into
+    # promptsh for interactive shells / terminals. Setting promptsh as the login
+    # shell here would bypass /etc/profile and prevent the desktop from starting.
 
-    # Also launch promptsh from bash for any interactive session
+    # Launch promptsh from bash for any interactive session
     bashrc = (
         "# promptOS — launch promptsh for any interactive shell session\n"
         "if [[ $- == *i* ]] && [[ -z \"$PROMPTSH_ACTIVE\" ]] && [[ -x /usr/local/bin/promptsh ]]; then\n"
@@ -539,7 +489,7 @@ def install_promptos():
             run(f"cp {src} {MOUNTPOINT}/etc/systemd/system/{svc}", check=False)
 
     # Enable ollama services
-    run(f"arch-chroot {MOUNTPOINT} systemctl enable ollama ollama-warmup", check=False)
+    run(f"arch-chroot {MOUNTPOINT} systemctl enable ollama", check=False)
 
     # Refresh desktop + icon caches so dock/app grid picks up promptOS GUI.
     run(f"arch-chroot {MOUNTPOINT} gtk-update-icon-cache -f /usr/share/icons/hicolor", check=False)
@@ -649,20 +599,10 @@ def main():
             print("Invalid username. Use lowercase letters/digits/_/-, max 32 chars, not 'root'.")
     admin_password = prompt_password(f"Password for {admin_user}")
 
-    # ── Optional desktop environment ──────────────────────────────────────────
-    install_gnome_choice = False
-    print_step(
-        "Desktop Environment (optional)",
-        "GNOME provides a graphical desktop. Requires internet (~1.5 GB download).\n"
-        "Skip this if you only want the AI shell — you can install it later."
-    )
-    if is_online():
-        install_gnome_choice = confirm("Install GNOME desktop after the base install?", default=False)
-    else:
-        if RICH:
-            console.print("[yellow]Offline — skipping GNOME prompt. Install later with: pacman -S gnome gdm[/yellow]")
-        else:
-            print("Offline — skipping GNOME prompt. Install later with: pacman -S gnome gdm")
+    # ── Desktop environment ───────────────────────────────────────────────────
+    # The graphical promptOS desktop (X11 + openbox + the AI search bar) ships
+    # in the live system and is cloned to the target by install_base(), so it is
+    # installed by default with no extra download. Nothing to choose here.
 
     # ── Install ───────────────────────────────────────────────────────────────
     print_step(
@@ -685,9 +625,6 @@ def main():
 
     print_step("Installing Bootloader")
     install_bootloader()
-
-    if install_gnome_choice:
-        install_gnome()
 
     # ── Done ──────────────────────────────────────────────────────────────────
     print_step(

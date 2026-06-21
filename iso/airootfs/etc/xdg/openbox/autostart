@@ -1,0 +1,22 @@
+# promptOS openbox autostart.
+# Runs once when the X session starts.
+
+# Launch detached (setsid) so these survive when openbox's autostart script
+# exits — otherwise the backgrounded jobs get SIGHUP and die (this was killing
+# the panel).
+
+# Compositor: real rounded corners + soft shadow for the overlay (xrender
+# backend so it works under emulation). Start first so windows are composited.
+setsid picom --config /etc/promptos/picom.conf >/dev/null 2>&1 < /dev/null &
+
+# Branded desktop background (falls back to a solid color if cairo/feh missing).
+setsid promptos-wallpaper >/dev/null 2>&1 < /dev/null &
+
+# Lightweight panel: taskbar for the windows the AI opens, system tray, clock.
+# Config lives outside /etc/xdg/tint2 to avoid a file conflict with the package.
+setsid sh -c 'sleep 1; exec tint2 -c /etc/promptos/tint2rc' >/dev/null 2>&1 < /dev/null &
+
+# Launch the promptOS search-bar overlay. It registers as the single primary
+# GtkApplication instance, so the Ctrl+Space hotkey (see rc.xml) re-summons it
+# via `promptos-gui --overlay --toggle` instead of spawning new windows.
+setsid promptos-gui --overlay >/dev/null 2>&1 < /dev/null &

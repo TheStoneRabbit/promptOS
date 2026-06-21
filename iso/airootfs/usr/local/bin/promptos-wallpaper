@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""promptos-wallpaper — render and set the promptOS desktop background.
+
+Draws a dark branded wallpaper (gradient + wordmark) with cairo and applies it
+with feh. If anything is unavailable, falls back to a solid color via xsetroot,
+so the desktop always comes up regardless of optional dependencies.
+"""
+import os
+import shutil
+import subprocess
+import sys
+
+BG = "#0b0b12"
+OUT = "/tmp/promptos-wallpaper.png"
+WALLPAPER_IMG = "/usr/share/promptos/wallpaper.png"   # branded image, if present
+W, H = 1920, 1080
+
+
+def _screen_size() -> tuple[int, int]:
+    try:
+        out = subprocess.check_output(["xdotool", "getdisplaygeometry"], text=True)
+        w, h = out.split()
+        return int(w), int(h)
+    except Exception:
+        return W, H
+
+
+def render(path: str) -> bool:
+    try:
+        import cairo
+    except Exception:
+        return False
+    try:
+        w, h = _screen_size()
+        surface = cairo.ImageSurface(cairo.FORMAT_RGB24, w, h)
+        ctx = cairo.Context(surface)
+
+        # Vertical gradient, near-black to a faint indigo.
+        grad = cairo.LinearGradient(0, 0, 0, h)
+        grad.add_color_stop_rgb(0.0, 0.043, 0.043, 0.071)   # #0b0b12
+        grad.add_color_stop_rgb(1.0, 0.078, 0.071, 0.125)   # #141220
+        ctx.set_source(grad)
+        ctx.paint()
+
+        # Subtle centered wordmark.
+        ctx.select_font_face("DejaVu Sans", cairo.FONT_SLANT_NORMAL,
+                             cairo.FONT_WEIGHT_BOLD)
+        ctx.set_font_size(max(48, h * 0.075))
+        text = "promptOS"
+        ext = ctx.text_extents(text)
+        ctx.move_to((w - ext.width) / 2 - ext.x_bearing,
+                    (h - ext.height) / 2 - ext.y_bearing)
+        ctx.set_source_rgba(0.62, 0.66, 0.82, 0.16)
+        ctx.show_text(text)
+
+        # Hairline accent under the wordmark.
+        ctx.set_source_rgba(0.40, 0.55, 0.95, 0.22)
+        ctx.set_line_width(2)
+        ctx.move_to(w / 2 - ext.width / 2, h / 2 + ext.height)
+        ctx.line_to(w / 2 + ext.width / 2, h / 2 + ext.height)
+        ctx.stroke()
+
+        surface.write_to_png(path)
+        return True
+    except Exception:
+        return False
+
+
+def set_with_feh(path: str) -> bool:
+    if not shutil.which("feh") or not os.path.exists(path):
+        return False
+    try:
+        subprocess.run(["feh", "--no-fehbg", "--bg-fill", path], check=True)
+        return True
+    except Exception:
+        return False
+
+
+def main() -> int:
+    # 1) The branded promptOS wallpaper image, if it shipped.
+    if set_with_feh(WALLPAPER_IMG):
+        return 0
+    # 2) Otherwise render a branded background with cairo.
+    if render(OUT) and set_with_feh(OUT):
+        return 0
+    # 3) Last resort: solid background, no extra dependencies.
+    subprocess.run(["xsetroot", "-solid", BG], check=False)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

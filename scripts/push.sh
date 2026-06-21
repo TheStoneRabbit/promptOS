@@ -58,9 +58,16 @@ FILES=(
     usr/local/bin/promptos-warmup
     usr/local/bin/promptos-install
     usr/local/bin/promptos-web
+    usr/local/bin/promptos-firstboot
+    usr/local/bin/promptos-wallpaper
     usr/local/lib/promptos/
     etc/profile.d/promptsh.sh
+    etc/profile.d/00-promptos-x.sh
     etc/bash.bashrc
+    root/.xinitrc
+    etc/xdg/openbox/
+    etc/promptos/picom.conf
+    etc/promptos/tint2rc
     etc/ssh/sshd_config.d/promptos.conf
     etc/vconsole.conf
     etc/dconf/profile/
@@ -111,8 +118,11 @@ chmod 755 /usr/local/bin/promptsh \
           /usr/local/bin/promptos-patch \
           /usr/local/bin/promptos-gui \
           /usr/local/bin/promptos-warmup \
+          /usr/local/bin/promptos-firstboot \
+          /usr/local/bin/promptos-wallpaper \
           /usr/local/bin/promptos-install 2>/dev/null || true
-chmod 755 /etc/profile.d/promptsh.sh 2>/dev/null || true
+chmod 755 /etc/profile.d/promptsh.sh /root/.xinitrc \
+          /etc/xdg/openbox/autostart 2>/dev/null || true
 # Recompile python bytecode for slightly faster cold start.
 python -m compileall -q /usr/local/lib/promptos/ 2>/dev/null || true
 # Reload sshd if its drop-in changed (idempotent — fine to run regardless).

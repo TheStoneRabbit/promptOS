@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  promptOS openbox configuration.
+  Minimal stacking WM tuned around the AI search-bar overlay. The agent opens
+  and focuses normal application windows; the human summons promptOS with a
+  global hotkey. Most sections use openbox defaults; the important parts are the
+  keyboard binding for the overlay and the per-application rule that turns the
+  overlay into a borderless, top-centered panel.
+-->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <focus>
+    <focusNew>yes</focusNew>
+    <followMouse>no</followMouse>
+    <focusLast>yes</focusLast>
+  </focus>
+
+  <placement>
+    <policy>Smart</policy>
+    <center>yes</center>
+  </placement>
+
+  <theme>
+    <name>Clearlooks</name>
+    <titleLayout>NLIMC</titleLayout>
+    <keepBorder>yes</keepBorder>
+  </theme>
+
+  <desktops>
+    <number>1</number>
+    <firstdesk>1</firstdesk>
+  </desktops>
+
+  <keyboard>
+    <!-- Summon / dismiss the promptOS search bar from anywhere. -->
+    <keybind key="C-space">
+      <action name="Execute">
+        <command>promptos-gui --overlay --toggle</command>
+      </action>
+    </keybind>
+    <!-- Escape hatch: a real terminal (runs promptsh). -->
+    <keybind key="W-Return">
+      <action name="Execute">
+        <command>xterm -e promptsh</command>
+      </action>
+    </keybind>
+    <!-- Standard window management. -->
+    <keybind key="A-F4">
+      <action name="Close"/>
+    </keybind>
+    <keybind key="A-Tab">
+      <action name="NextWindow"/>
+    </keybind>
+    <keybind key="A-S-Tab">
+      <action name="PreviousWindow"/>
+    </keybind>
+    <keybind key="W-d">
+      <action name="ToggleShowDesktop"/>
+    </keybind>
+  </keyboard>
+
+  <mouse>
+    <context name="Frame">
+      <mousebind button="A-Left" action="Drag">
+        <action name="Move"/>
+      </mousebind>
+      <mousebind button="A-Right" action="Drag">
+        <action name="Resize"/>
+      </mousebind>
+    </context>
+    <context name="Titlebar">
+      <mousebind button="Left" action="Drag">
+        <action name="Move"/>
+      </mousebind>
+      <mousebind button="Left" action="DoubleClick">
+        <action name="ToggleMaximize"/>
+      </mousebind>
+    </context>
+    <context name="Client">
+      <mousebind button="Left" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+    </context>
+    <!-- Titlebar buttons need explicit actions, or clicking them does nothing
+         (this is why the X button wasn't closing windows). -->
+    <context name="Close">
+      <mousebind button="Left" action="Click">
+        <action name="Close"/>
+      </mousebind>
+    </context>
+    <context name="Iconify">
+      <mousebind button="Left" action="Click">
+        <action name="Iconify"/>
+      </mousebind>
+    </context>
+    <context name="Maximize">
+      <mousebind button="Left" action="Click">
+        <action name="ToggleMaximize"/>
+      </mousebind>
+    </context>
+  </mouse>
+
+  <applications>
+    <!-- The promptOS overlay: borderless panel pinned top-center, above all. -->
+    <application name="promptos-gui*">
+      <decor>no</decor>
+      <focus>yes</focus>
+      <layer>above</layer>
+      <skip_taskbar>yes</skip_taskbar>
+      <skip_pager>yes</skip_pager>
+      <position force="no">
+        <x>center</x>
+        <y>70</y>
+      </position>
+    </application>
+    <application class="org.promptos.ControlCenter">
+      <decor>no</decor>
+      <focus>yes</focus>
+      <layer>above</layer>
+      <skip_taskbar>yes</skip_taskbar>
+      <skip_pager>yes</skip_pager>
+      <position force="no">
+        <x>center</x>
+        <y>70</y>
+      </position>
+    </application>
+  </applications>
+</openbox_config>

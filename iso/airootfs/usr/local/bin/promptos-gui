@@ -25,8 +25,16 @@ import datetime
 import errno
 import pty
 import select
+import signal
 from pathlib import Path
 from typing import Callable
+
+# GTK4 defaults to its GL (ngl) renderer, which needs DRI3/GPU acceleration.
+# In a VM or on a GPU-less/headless-ish setup that fails ("Could not get DRI3
+# device") and windows never map. Force the software cairo renderer so the UI
+# always displays. Set GSK_RENDERER in the environment to override.
+os.environ.setdefault("GSK_RENDERER", "cairo")
+os.environ.setdefault("GDK_BACKEND", "x11")
 
 try:
     import gi
@@ -37,7 +45,7 @@ except ImportError:
 try:
     gi.require_version("Gtk", "4.0")
     gi.require_version("Adw", "1")
-    from gi.repository import Adw, GLib, Gtk, Pango, Gdk
+    from gi.repository import Adw, GLib, Gio, Gtk, Pango, Gdk
 except (ValueError, ImportError):
     print("promptos-gui requires gtk4 and libadwaita. Install: sudo pacman -S gtk4 libadwaita")
     raise SystemExit(1)
@@ -140,6 +148,44 @@ box.window-topbar {
   border: 1px solid rgba(107, 114, 128, 0.45);
   border-radius: 12px;
   padding: 8px;
+}
+
+/* Assistant bubbles + general text - light on dark (force-dark also handles
+   this, but set it explicitly so text is never black on the dark surface). */
+frame.assistant-bubble {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 14px;
+}
+frame.assistant-bubble label,
+label.md-heading {
+  color: #e7e9f0;
+}
+
+/* --- Spotlight-style overlay (search-bar) mode --- */
+/* The window is transparent; picom (xrender) composites it so the inner box's
+   rounded corners are real and a soft shadow gives depth. The box is a single
+   seamless surface - no border. */
+.overlay-window {
+  background-color: transparent;
+}
+.overlay-window > box {
+  background-color: rgba(14, 16, 23, 0.90);
+  border: none;
+  border-radius: 20px;
+  padding: 14px;
+}
+.overlay-window label {
+  color: #e7e9f0;
+}
+.overlay-window .composer-input {
+  background-color: rgba(255, 255, 255, 0.06);
+  border: none;
+  border-radius: 14px;
+}
+.overlay-window .composer-input-view {
+  font-size: 19px;
+  color: #f3f5fa;
+  padding: 8px 6px;
 }
 """
 
@@ -563,8 +609,9 @@ class CommandCard(Gtk.Frame):
 
 
 class PromptOSWindow(Adw.ApplicationWindow):
-    def __init__(self, app: Adw.Application):
+    def __init__(self, app: Adw.Application, overlay: bool = False):
         super().__init__(application=app)
+        self.overlay = overlay
         self.set_title("promptOS")
         self.set_icon_name("org.promptos.ControlCenter")
         self.set_default_size(1320, 860)
@@ -575,6 +622,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.current_assistant_bubble: ChatBubble | None = None
         self.command_queue: list[str] = []
         self.command_running = False
+        self._current_proc = None          # Popen of the running command, if any
+        self._commands_cancelled = False   # set by Stop to halt the queue
         self.autorun_commands = False
         self.suggested_next_text = ""
         self.suggested_next_items: list[str] = []
@@ -593,6 +642,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._load_env_config()
         self._install_css()
         self._build_ui()
+        if self.overlay:
+            self._apply_overlay_chrome()
         self._load_provider()
         self._new_chat()
         self._refresh_sessions()
@@ -633,8 +684,10 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_content(page)
+        self._page = page
 
         topbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._topbar = topbar
         topbar.add_css_class("window-topbar")
         topbar.set_margin_top(10)
         topbar.set_margin_bottom(8)
@@ -681,9 +734,11 @@ class PromptOSWindow(Adw.ApplicationWindow):
         topbar.append(close_btn)
 
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self._root = root
         page.append(root)
 
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self._sidebar = sidebar
         sidebar.set_size_request(370, -1)
         sidebar.set_margin_top(12)
         sidebar.set_margin_bottom(12)
@@ -730,6 +785,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         sidebar.append(refresh_btn)
 
         main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self._main = main
         main.set_hexpand(True)
         main.set_vexpand(True)
         main.set_margin_top(8)
@@ -748,6 +804,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         main.append(self.chat_scroll)
 
         cmd_frame = Gtk.Frame()
+        self._cmd_frame = cmd_frame
         cmd_frame.set_margin_top(6)
         cmd_frame.set_margin_bottom(6)
         cmd_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -758,12 +815,19 @@ class PromptOSWindow(Adw.ApplicationWindow):
         cmd_label = Gtk.Label(label="Actions", xalign=0)
         cmd_label.add_css_class("caption")
         self.cmd_cards_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        # Wrap the action cards in a scroller so the Actions area can be capped
+        # (in overlay mode, to a fraction of the window) and scroll when full.
+        self.cmd_scroll = Gtk.ScrolledWindow()
+        self.cmd_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.cmd_scroll.set_propagate_natural_height(True)
+        self.cmd_scroll.set_child(self.cmd_cards_box)
         cmd_box.append(cmd_label)
-        cmd_box.append(self.cmd_cards_box)
+        cmd_box.append(self.cmd_scroll)
         cmd_frame.set_child(cmd_box)
         main.append(cmd_frame)
 
         composer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self._composer = composer
         composer.set_margin_top(6)
         composer.set_margin_bottom(12)
         composer.set_margin_start(10)
@@ -813,7 +877,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.send_btn = send
         self.stop_btn = Gtk.Button(label="Stop")
         self.stop_btn.add_css_class("stop-btn")
-        self.stop_btn.connect("clicked", lambda *_: self._stop_generation())
+        self.stop_btn.connect("clicked", lambda *_: self._on_stop_clicked())
         self.stop_btn.set_valign(Gtk.Align.START)
         self.stop_btn.set_vexpand(False)
         self.stop_btn.set_sensitive(False)
@@ -823,6 +887,106 @@ class PromptOSWindow(Adw.ApplicationWindow):
         row.append(self.stop_btn)
         composer.append(row)
         main.append(composer)
+
+    # ------------------------------------------------------------------
+    # Overlay (Spotlight-style search bar) mode
+    # ------------------------------------------------------------------
+    def _apply_overlay_chrome(self):
+        """Reconfigure the full window into a borderless, top-centered search bar.
+
+        Reuses every widget built by _build_ui so all downstream logic keeps
+        working; we only hide the desktop chrome and reorder the layout so the
+        composer becomes the search bar at the top, with results below.
+        """
+        self.set_decorated(False)
+        self.set_resizable(True)
+        # Start large (~2/3 of the screen, always >= half) but resizable +
+        # movable via Alt+drag in openbox; the user's size/position then stick.
+        mon_w, mon_h = 1280, 800
+        try:
+            display = self.get_display() or Gdk.Display.get_default()
+            monitors = display.get_monitors()
+            if monitors.get_n_items() > 0:
+                geo = monitors.get_item(0).get_geometry()
+                mon_w, mon_h = geo.width, geo.height
+        except Exception:
+            pass
+        win_w = min(mon_w - 80, max(960, int(mon_w * 0.66)))
+        win_h = min(mon_h - 80, max(620, int(mon_h * 0.66)))
+        self.set_default_size(win_w, win_h)
+        self.add_css_class("overlay-window")
+
+        # Hide the desktop-style chrome: title bar row and the sessions sidebar.
+        self._topbar.set_visible(False)
+        self._sidebar.set_visible(False)
+
+        # Search bar on top, then action cards, then the conversation thread.
+        self._main.reorder_child_after(self._composer, None)
+        self._main.reorder_child_after(self._cmd_frame, self._composer)
+
+        # Conversation fills the window and scrolls — so manual resizing sticks
+        # and the window never auto-grows past the screen.
+        self.chat_scroll.set_vexpand(True)
+        self.chat_scroll.set_propagate_natural_height(False)
+        self.chat_scroll.set_min_content_height(60)
+
+        # Actions area is scrollable and capped to ~1/4 of the window height.
+        self.cmd_scroll.set_propagate_natural_height(True)
+        self._update_actions_cap()
+
+        # A search bar acts immediately — desktop control should feel instant.
+        self.autorun_commands = True
+        self.autorun_switch.set_active(True)
+
+        # Escape hides the overlay; closing it just hides (stays resident for
+        # the next hotkey summon) rather than quitting the session.
+        key = Gtk.EventControllerKey.new()
+        key.connect("key-pressed", self._on_overlay_key)
+        self.add_controller(key)
+        self.connect("close-request", self._on_overlay_close)
+
+        GLib.idle_add(self.entry.grab_focus)
+
+    def _update_actions_cap(self):
+        """Keep the Actions scroller at ~1/4 of the current window height."""
+        if not getattr(self, "overlay", False):
+            return
+        h = self.get_height() or 0
+        if h <= 0:
+            h = 560
+        self.cmd_scroll.set_max_content_height(max(90, h // 4))
+
+    def _on_overlay_key(self, _controller, keyval, _keycode, _state):
+        if keyval == Gdk.KEY_Escape:
+            self.hide_overlay()
+            return True
+        return False
+
+    def _on_overlay_close(self, *_):
+        # Hide instead of destroy so the single instance (and its position)
+        # survives for the next summon.
+        self.hide_overlay()
+        return True
+
+    def reveal_overlay(self):
+        self._overlay_shown = True
+        self.set_visible(True)
+        self.unminimize()
+        self.present()
+        GLib.idle_add(self.entry.grab_focus)
+        GLib.idle_add(self._update_actions_cap)
+
+    def hide_overlay(self):
+        # minimize (not unmap) so position/size persist for the next summon
+        self._overlay_shown = False
+        self.minimize()
+
+    def toggle_overlay(self):
+        # Ctrl+Space again while open closes it, regardless of focus.
+        if getattr(self, "_overlay_shown", False):
+            self.hide_overlay()
+        else:
+            self.reveal_overlay()
 
     def _load_provider(self):
         override = os.environ.get("PROMPTOS_PROVIDER")
@@ -1159,6 +1323,55 @@ class PromptOSWindow(Adw.ApplicationWindow):
             self._cancelled_generations.add(self._generation_seq)
             self._set_input_enabled(True)
 
+    def _on_stop_clicked(self):
+        # Stop cancels both the LLM response AND any running/queued commands.
+        self._cancelled_generations.add(self._generation_seq)
+        self._stop_all_commands()
+        self._set_input_enabled(True)
+
+    def _stop_all_commands(self):
+        """Kill the currently running command (and its child process group) and
+        drop every queued/pending command so nothing else runs."""
+        had_work = self.command_running or bool(self.command_queue) or bool(self.pending_cards)
+        self._commands_cancelled = True
+        self.command_queue.clear()
+
+        proc = self._current_proc
+        if proc is not None and proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except Exception:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+
+            def _hard_kill(p=proc):
+                try:
+                    if p.poll() is None:
+                        os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                except Exception:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+            threading.Timer(2.0, _hard_kill).start()
+
+        # Remove every pending command card (current + upcoming).
+        for command, card in list(self.pending_cards.items()):
+            try:
+                self.cmd_cards_box.remove(card)
+            except Exception:
+                pass
+        self.pending_cards.clear()
+
+        self.command_running = False
+        self.stop_btn.set_sensitive(False)
+        if had_work:
+            self._add_assistant_message(
+                "Stopped the running command and cleared all pending commands."
+            )
+
     def _refresh_provider_badge(self):
         name = self.active_provider.name if self.active_provider else "none"
         model = getattr(self.active_provider, "model", "") if self.active_provider else ""
@@ -1450,6 +1663,7 @@ os.replace(tmp_path, path)
             card = CommandCard(command, self._run_command_card, self._skip_command_card)
             self.pending_cards[command] = card
             self.cmd_cards_box.append(card)
+            self._update_actions_cap()
             if self.autorun_commands:
                 self._run_command_card(command)
         if not self.autorun_commands:
@@ -1547,6 +1761,8 @@ os.replace(tmp_path, path)
             card.set_state("Running...")
             card.set_progress("Starting...", None)
         self.command_running = True
+        self._commands_cancelled = False
+        self.stop_btn.set_sensitive(True)   # let Stop interrupt the command
 
         handled, code, output = self._maybe_handle_cd_command(command)
         if handled:
@@ -1581,6 +1797,13 @@ os.replace(tmp_path, path)
 
     def _on_card_finished(self, command: str, code: int, output: str):
         self.command_running = False
+        self._current_proc = None
+        # If Stop was pressed, the queue/cards were already cleared — don't run
+        # follow-ups or start the next command.
+        if self._commands_cancelled:
+            self._commands_cancelled = False
+            self.stop_btn.set_sensitive(False)
+            return False
         card = self.pending_cards.get(command)
         if card:
             self.cmd_cards_box.remove(card)
@@ -1593,6 +1816,8 @@ os.replace(tmp_path, path)
         self._request_suggested_next_async()
         self._autosave_current_session()
         self._start_next_queued_command()
+        if not self.command_running:
+            self.stop_btn.set_sensitive(False)
         if not self.autorun_commands:
             self._focus_run_on_next_pending_card()
             if not self.pending_cards:
@@ -2184,7 +2409,9 @@ os.replace(tmp_path, path)
                 cwd=self.current_cwd,
                 env=env,
                 close_fds=True,
+                start_new_session=True,   # own process group so Stop can kill all children
             )
+            self._current_proc = proc
             os.close(slave_fd)
             slave_fd = -1
 
@@ -2215,6 +2442,7 @@ os.replace(tmp_path, path)
                 self._emit_progress_update(pending, progress_callback, last_progress)
             returncode = proc.wait()
         finally:
+            self._current_proc = None
             for fd in (slave_fd, master_fd):
                 if fd >= 0:
                     try:
@@ -2552,19 +2780,52 @@ os.replace(tmp_path, path)
 
 
 class PromptOSApp(Adw.Application):
-    def __init__(self):
-        super().__init__(application_id="org.promptos.ControlCenter")
+    def __init__(self, overlay: bool = False):
+        super().__init__(
+            application_id="org.promptos.ControlCenter",
+            flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE,
+        )
+        self.overlay = overlay
 
-    def do_activate(self):
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        # Force the dark color scheme so text is light on the dark surfaces
+        # (otherwise assistant text falls back to the light theme's near-black).
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+
+    def _ensure_window(self) -> "PromptOSWindow":
         window = self.props.active_window
         if window is None:
-            window = PromptOSWindow(self)
-        window.present()
+            window = PromptOSWindow(self, overlay=self.overlay)
+        return window
+
+    def do_activate(self):
+        window = self._ensure_window()
+        if self.overlay:
+            window.reveal_overlay()
+        else:
+            window.present()
+
+    def do_command_line(self, command_line):
+        # Runs in the primary instance for every launch. A second invocation of
+        # `promptos-gui --overlay --toggle` (the desktop hotkey) is forwarded
+        # here, letting us toggle the resident overlay instead of spawning a
+        # new window.
+        args = command_line.get_arguments()
+        window = self._ensure_window()
+        if self.overlay and "--toggle" in args:
+            window.toggle_overlay()
+        elif self.overlay:
+            window.reveal_overlay()
+        else:
+            window.present()
+        return 0
 
 
 def main():
-    app = PromptOSApp()
-    app.run()
+    overlay = "--overlay" in sys.argv
+    app = PromptOSApp(overlay=overlay)
+    app.run(sys.argv)
 
 
 if __name__ == "__main__":

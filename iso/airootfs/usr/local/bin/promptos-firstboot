@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# promptos-firstboot — one-time onboarding shown on the console before the
+# graphical desktop starts: connect to WiFi, then choose an AI provider and
+# enter an API key (Claude / OpenAI) so a capable model can drive the machine.
+#
+# Reuses the existing tested flows (promptos-wifi, promptos-keys). Runs once;
+# a marker file suppresses it on later boots. Re-run anytime with --force.
+set -u
+
+MARKER="/etc/promptos/.onboarded"
+KEYS_FILE="/etc/promptos/keys"
+
+BOLD=$'\033[1m'; DIM=$'\033[2m'; GREEN=$'\033[1;32m'; CYAN=$'\033[1;36m'; RESET=$'\033[0m'
+
+[ "${1:-}" = "--force" ] && rm -f "$MARKER"
+[ -f "$MARKER" ] && exit 0
+
+clear 2>/dev/null || true
+if command -v figlet >/dev/null 2>&1; then
+    figlet -w "$(tput cols 2>/dev/null || echo 80)" promptOS 2>/dev/null
+fi
+cat <<EOF
+
+${BOLD}Welcome to promptOS.${RESET}
+${DIM}A Linux desktop operated by an AI. Let's get you set up.${RESET}
+
+EOF
+
+# --- Step 1: Network ---------------------------------------------------------
+echo "${CYAN}[1/2] Network${RESET}"
+if [ -x /usr/local/bin/promptos-wifi ]; then
+    # Only prompts if offline; on a wired/NAT link it confirms and moves on.
+    /usr/local/bin/promptos-wifi --auto
+fi
+echo
+
+# --- Step 2: AI provider + API key ------------------------------------------
+echo "${CYAN}[2/2] AI provider${RESET}"
+echo "${DIM}promptOS can run a local model offline, but Claude or OpenAI control"
+echo "the desktop far more capably. Enter a key now, or skip to use local.${RESET}"
+echo
+
+have_key=0
+if [ -f "$KEYS_FILE" ] && grep -qE '^(ANTHROPIC_API_KEY|OPENAI_API_KEY|GROQ_API_KEY)=.+' "$KEYS_FILE"; then
+    have_key=1
+fi
+
+if [ "$have_key" -eq 0 ] && [ -x /usr/local/bin/promptos-keys ]; then
+    /usr/local/bin/promptos-keys setup
+else
+    echo "${DIM}An API key is already configured — skipping.${RESET}"
+fi
+
+# --- Done --------------------------------------------------------------------
+mkdir -p /etc/promptos
+touch "$MARKER"
+echo
+echo "${GREEN}Setup complete. Starting the promptOS desktop...${RESET}"
+echo "${DIM}Tip: press Ctrl+Space anytime to summon the promptOS search bar.${RESET}"
+sleep 2
