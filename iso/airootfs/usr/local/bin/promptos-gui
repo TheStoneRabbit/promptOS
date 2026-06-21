@@ -165,11 +165,12 @@ label.md-heading {
 /* The window is transparent; picom (xrender) composites it so the inner box's
    rounded corners are real and a soft shadow gives depth. The box is a single
    seamless surface - no border. */
-.overlay-window {
-  background-color: transparent;
+.overlay-window,
+.overlay-window > box,
+.overlay-window > * {
+  background-color: #0a0c12;
 }
 .overlay-window > box {
-  background-color: rgba(14, 16, 23, 0.90);
   border: none;
   border-radius: 20px;
   padding: 14px;
