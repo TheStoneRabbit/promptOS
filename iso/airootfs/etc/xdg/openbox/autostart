@@ -16,6 +16,10 @@ setsid promptos-wallpaper >/dev/null 2>&1 < /dev/null &
 # Config lives outside /etc/xdg/tint2 to avoid a file conflict with the package.
 setsid sh -c 'sleep 1; exec tint2 -c /etc/promptos/tint2rc' >/dev/null 2>&1 < /dev/null &
 
+# WiFi GUI: NetworkManager tray applet (network picker + password dialogs).
+# Started after the panel so its tray icon lands in tint2's system tray.
+setsid sh -c 'sleep 2; exec nm-applet' >/dev/null 2>&1 < /dev/null &
+
 # Launch the promptOS search-bar overlay. It registers as the single primary
 # GtkApplication instance, so the Ctrl+Space hotkey (see rc.xml) re-summons it
 # via `promptos-gui --overlay --toggle` instead of spawning new windows.

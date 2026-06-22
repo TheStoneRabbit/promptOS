@@ -66,6 +66,7 @@ feh
 python-cairo
 python-pyxdg
 picom
+network-manager-applet
 
 # Build tools (needed for pip installs)
 base-devel
