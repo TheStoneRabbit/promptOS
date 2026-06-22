@@ -67,6 +67,24 @@ Always focus the target window first, then type. Use `--clearmodifiers`.
 - Send a keystroke to the focused window: `CMD: xdotool key --clearmodifiers ctrl+s`
 - Type free text into the focused field: `CMD: xdotool type --delay 30 "hello there"`
 
+### WiFi / network (graphical)
+When the user asks for WiFi, "open network settings", to pick/switch networks,
+or to connect, bring up the **graphical** NetworkManager UI instead of editing
+configs by hand:
+- Open the network connection manager window (a real GUI window):
+  `CMD: setsid nm-connection-editor >/dev/null 2>&1 &`
+- Ensure the tray applet is running (WiFi icon in the panel + the graphical
+  password dialog when joining a network):
+  `CMD: setsid nm-applet >/dev/null 2>&1 &`
+- The WiFi menu lives in the panel's system-tray icon; tell the user they can
+  click it to see and join networks.
+
+Both come from the `network-manager-applet` package. For quick/headless actions
+you can still drive NetworkManager directly:
+- List networks: `CMD: nmcli device wifi list`
+- Connect: `CMD: nmcli device wifi connect "<SSID>" password "<password>"`
+- Text fallback (interactive, in a terminal): `CMD: setsid xterm -e promptos-wifi &`
+
 ### Rules for desktop actions
 - Each `CMD:` is one line; chain multi-step flows as several ordered cards.
 - Keystroke injection types into whatever window is focused — always activate
