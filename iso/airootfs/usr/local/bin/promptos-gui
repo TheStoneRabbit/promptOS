@@ -625,6 +625,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.command_running = False
         self._current_proc = None          # Popen of the running command, if any
         self._commands_cancelled = False   # set by Stop to halt the queue
+        self._halted = False               # set by Stop: gate ALL async LLM follow-ups
         self.autorun_commands = False
         self.suggested_next_text = ""
         self.suggested_next_items: list[str] = []
@@ -1103,6 +1104,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
             self._add_assistant_message("No AI provider available. Configure keys or run local ollama.")
             return
 
+        self._halted = False   # new prompt re-enables follow-ups
         self._route_openai_model_for_turn(text)
         self._add_user_message(text)
         self.history.append(Message("user", text))
@@ -1325,7 +1327,10 @@ class PromptOSWindow(Adw.ApplicationWindow):
             self._set_input_enabled(True)
 
     def _on_stop_clicked(self):
-        # Stop cancels both the LLM response AND any running/queued commands.
+        # Stop cancels EVERYTHING: the current LLM response, any running/queued
+        # commands, and any in-flight follow-up/suggestion LLM calls. _halted
+        # gates all async callbacks until the user sends a new prompt.
+        self._halted = True
         self._cancelled_generations.add(self._generation_seq)
         self._stop_all_commands()
         self._set_input_enabled(True)
@@ -1658,6 +1663,8 @@ os.replace(tmp_path, path)
         self.autorun_commands = switch.get_active()
 
     def _parse_cmd_cards(self, text: str):
+        if self._halted:
+            return   # Stop pressed: don't create or auto-run any commands
         for command in self._extract_suggested_commands(text):
             if not command or command in self.pending_cards:
                 continue
@@ -1868,6 +1875,8 @@ os.replace(tmp_path, path)
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_command_followup_ready(self, response: str):
+        if self._halted:
+            return False   # Stop pressed: drop the follow-up, don't continue the chain
         self.history.append(Message("assistant", response))
         self._add_assistant_message(response)
         self._parse_cmd_cards(response)
@@ -2757,7 +2766,7 @@ os.replace(tmp_path, path)
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_suggested_next_ready(self, req_id: int, text: str):
-        if req_id != self.suggest_request_seq:
+        if self._halted or req_id != self.suggest_request_seq:
             return False
         cleaned = text.strip().strip("`")
         items: list[str] = []
