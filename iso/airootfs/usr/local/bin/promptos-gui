@@ -885,9 +885,17 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.stop_btn.set_vexpand(False)
         self.stop_btn.set_sensitive(False)
 
+        # Reset the conversation/context but keep this window open.
+        self.new_context_btn = Gtk.Button(label="New Context")
+        self.new_context_btn.add_css_class("promptos-btn")
+        self.new_context_btn.set_valign(Gtk.Align.START)
+        self.new_context_btn.set_vexpand(False)
+        self.new_context_btn.connect("clicked", lambda *_: self._new_context())
+
         row.append(entry_scroll)
         row.append(send)
         row.append(self.stop_btn)
+        row.append(self.new_context_btn)
         composer.append(row)
         main.append(composer)
 
@@ -1027,6 +1035,12 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
         self._add_assistant_message("New chat started. Ask anything about this system.")
         self._autosave_current_session()
+
+    def _new_context(self):
+        # "New Context" button: halt anything in flight, then reset the
+        # conversation and start fresh — keeping the same window open.
+        self._on_stop_clicked()
+        self._new_chat()
 
     def _clear_chat_view(self):
         child = self.chat_list.get_first_child()
