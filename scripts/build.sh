@@ -23,6 +23,7 @@ OPENAI_KEY="${PROMPTOS_OPENAI_KEY:-}"
 CLAUDE_KEY="${PROMPTOS_CLAUDE_KEY:-}"
 GROQ_KEY="${PROMPTOS_GROQ_KEY:-}"
 PROVIDER="${PROMPTOS_PROVIDER:-}"
+NOCACHE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -30,6 +31,10 @@ while [ $# -gt 0 ]; do
         --claude-key) CLAUDE_KEY="$2"; shift 2 ;;
         --groq-key)   GROQ_KEY="$2";   shift 2 ;;
         --provider)   PROVIDER="$2";   shift 2 ;;
+        # Force a clean Docker image rebuild (re-runs the slow archiso install).
+        # Normally the base image is cached; COPY layers still pick up your file
+        # changes automatically. Use this only if you suspect a stale image.
+        --fresh|--no-cache) NOCACHE="--no-cache"; shift ;;
         -h|--help)    sed -n '2,18p' "$0"; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
@@ -46,15 +51,22 @@ if [ "${#DOCKER_ENV[@]}" -gt 0 ]; then
 fi
 
 echo "==> Building Docker image..."
-docker build --no-cache -t "$IMAGE_NAME" -f "$REPO_ROOT/Dockerfile.build" "$REPO_ROOT"
+# Cached by default: the expensive 'pacman -Syu archiso' base layer is reused
+# across builds, while the COPY iso/ + docker-build.sh layers are re-evaluated
+# whenever those files change (Docker hashes their contents). Pass --fresh for a
+# full clean rebuild.
+docker build $NOCACHE -t "$IMAGE_NAME" -f "$REPO_ROOT/Dockerfile.build" "$REPO_ROOT"
 
 echo "==> Running ISO build inside container..."
 mkdir -p "$DIST_DIR"
-# Mount ollama-cache volume to avoid re-downloading the model on every rebuild
+# Persistent volumes so rebuilds don't re-fetch from the (slow) archive mirror:
+#  - pacman-cache: downloaded packages are reused by mkarchiso/pacstrap
+#  - ollama-cache: the local model (if any) isn't re-pulled
 docker run --rm \
     --privileged \
     ${DOCKER_ENV[@]+"${DOCKER_ENV[@]}"} \
     -v "$DIST_DIR":/output \
+    -v promptos-pacman-cache:/var/cache/pacman/pkg \
     -v promptos-ollama-cache:/var/lib/ollama \
     "$IMAGE_NAME"
 
