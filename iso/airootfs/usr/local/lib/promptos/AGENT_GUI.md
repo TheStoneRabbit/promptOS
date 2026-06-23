@@ -74,6 +74,19 @@ Always focus the target window first, then type. Use `--clearmodifiers`.
 - Send a keystroke to the focused window: `CMD: xdotool key --clearmodifiers ctrl+s`
 - Type free text into the focused field: `CMD: xdotool type --delay 30 "hello there"`
 
+### Typing commands into a terminal window
+A terminal you open (`konsole`) starts in **promptsh** (the AI shell), NOT bash,
+so shell commands typed into it would be sent to the AI instead of executed.
+Before typing any commands into a terminal you opened, first drop into a real
+bash shell by sending `!bash`:
+  `CMD: xdotool search --class konsole windowactivate --sync type --clearmodifiers '!bash'`
+  `CMD: xdotool key --clearmodifiers Return`
+Only then type the actual commands (each followed by Return). `exit` returns to
+promptsh.
+(Note: for most tasks you don't need a terminal at all — emit the command as a
+`CMD:` card and it runs in bash directly. Use the terminal+`!bash` flow only
+when the user specifically wants commands run inside a visible terminal window.)
+
 ### WiFi / network (graphical)
 When the user asks for WiFi, "open network settings", to pick/switch networks,
 or to connect, bring up the **graphical** NetworkManager UI instead of editing
