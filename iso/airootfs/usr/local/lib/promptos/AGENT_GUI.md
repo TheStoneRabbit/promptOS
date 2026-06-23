@@ -74,18 +74,29 @@ Always focus the target window first, then type. Use `--clearmodifiers`.
 - Send a keystroke to the focused window: `CMD: xdotool key --clearmodifiers ctrl+s`
 - Type free text into the focused field: `CMD: xdotool type --delay 30 "hello there"`
 
-### Typing commands into a terminal window
-A terminal you open (`konsole`) starts in **promptsh** (the AI shell), NOT bash,
-so shell commands typed into it would be sent to the AI instead of executed.
-Before typing any commands into a terminal you opened, first drop into a real
-bash shell by sending `!bash`:
-  `CMD: xdotool search --class konsole windowactivate --sync type --clearmodifiers '!bash'`
-  `CMD: xdotool key --clearmodifiers Return`
-Only then type the actual commands (each followed by Return). `exit` returns to
-promptsh.
-(Note: for most tasks you don't need a terminal at all — emit the command as a
-`CMD:` card and it runs in bash directly. Use the terminal+`!bash` flow only
-when the user specifically wants commands run inside a visible terminal window.)
+### Running a command in a terminal window
+A terminal you open (`konsole`) starts in **promptsh** (the AI shell). Do NOT
+type raw shell commands or `!bash` into it. Instead, let the promptsh agent in
+that window run the command: enable autorun, then tell it — in **plain English**
+— what command to run, and promptsh executes it.
+
+Sequence (after the user asks for something to run in a terminal window):
+1. Open the terminal: `CMD: setsid konsole >/dev/null 2>&1 &`
+2. Wait ~5 seconds for promptsh to finish starting, focus it, and turn on
+   autorun so it runs without asking:
+   `CMD: sleep 5; xdotool search --class konsole windowactivate --sync type --clearmodifiers '/autorun on'`
+   `CMD: xdotool key --clearmodifiers Return`
+3. Tell it, in plain English, what command to run, then submit:
+   `CMD: xdotool type --clearmodifiers 'update all packages on the system'`
+   `CMD: xdotool key --clearmodifiers Return`
+
+Always send `/autorun on` (step 2) BEFORE the plain-English instruction (step 3).
+Phrase step 3 as a natural-language request describing the command to run — not
+a raw shell command. promptsh's AI turns it into the command and runs it.
+
+(For most tasks you don't need a terminal window at all — emit the command as a
+`CMD:` card and it runs in bash directly. Use this terminal flow only when the
+user specifically wants it run inside a visible terminal window.)
 
 ### WiFi / network (graphical)
 When the user asks for WiFi, "open network settings", to pick/switch networks,
