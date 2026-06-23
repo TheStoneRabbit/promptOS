@@ -60,6 +60,7 @@ openbox
 wmctrl
 xdotool
 xterm
+konsole
 ttf-dejavu
 tint2
 feh

@@ -48,7 +48,7 @@ is **X11 + openbox**, so use `xdotool` and `wmctrl` from `CMD:` cards.
 ### Opening applications
 - Launch detached so the app outlives the command card:
   `CMD: setsid firefox >/dev/null 2>&1 &`
-- For a terminal: `CMD: setsid xterm >/dev/null 2>&1 &`
+- For a terminal: `CMD: setsid konsole >/dev/null 2>&1 &`
 - If a package isn't installed, install it first (`pacman -S --noconfirm <pkg>`)
   then launch it.
 
@@ -83,7 +83,7 @@ Both come from the `network-manager-applet` package. For quick/headless actions
 you can still drive NetworkManager directly:
 - List networks: `CMD: nmcli device wifi list`
 - Connect: `CMD: nmcli device wifi connect "<SSID>" password "<password>"`
-- Text fallback (interactive, in a terminal): `CMD: setsid xterm -e promptos-wifi &`
+- Text fallback (interactive, in a terminal): `CMD: setsid konsole -e promptos-wifi &`
 
 ### Rules for desktop actions
 - Each `CMD:` is one line; chain multi-step flows as several ordered cards.

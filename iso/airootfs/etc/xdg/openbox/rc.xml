@@ -40,7 +40,7 @@
     <!-- Escape hatch: a real terminal (runs promptsh). -->
     <keybind key="W-Return">
       <action name="Execute">
-        <command>xterm -e promptsh</command>
+        <command>konsole -e promptsh</command>
       </action>
     </keybind>
     <!-- Standard window management. -->
