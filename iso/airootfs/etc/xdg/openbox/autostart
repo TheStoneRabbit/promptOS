@@ -12,12 +12,14 @@ setsid picom --config /etc/promptos/picom.conf >/dev/null 2>&1 < /dev/null &
 # Branded desktop background (falls back to a solid color if cairo/feh missing).
 setsid promptos-wallpaper >/dev/null 2>&1 < /dev/null &
 
-# Lightweight panel: taskbar for the windows the AI opens, system tray, clock.
-# Config lives outside /etc/xdg/tint2 to avoid a file conflict with the package.
-setsid sh -c 'sleep 1; exec tint2 -c /etc/promptos/tint2rc' >/dev/null 2>&1 < /dev/null &
+# Dock (macOS-style): shows running apps; click an icon to restore/raise its
+# window, including minimized ones. Replaces tint2, which crashed on some
+# hardware. Needs the compositor (picom, started above) for transparency.
+setsid sh -c 'sleep 1; exec plank' >/dev/null 2>&1 < /dev/null &
 
-# WiFi GUI: NetworkManager tray applet (network picker + password dialogs).
-# Started after the panel so its tray icon lands in tint2's system tray.
+# NetworkManager agent: provides the graphical password dialogs when joining a
+# network. (Plank is a dock, not a system tray, so there's no tray icon — use
+# nm-connection-editor for the WiFi UI; the agent opens it on request.)
 setsid sh -c 'sleep 2; exec nm-applet' >/dev/null 2>&1 < /dev/null &
 
 # Launch the promptOS search-bar overlay. It registers as the single primary

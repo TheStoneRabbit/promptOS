@@ -62,7 +62,7 @@ xdotool
 xterm
 konsole
 ttf-dejavu
-tint2
+plank
 feh
 python-cairo
 python-pyxdg

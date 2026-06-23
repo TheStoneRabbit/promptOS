@@ -66,7 +66,6 @@ FILES=(
     root/.xinitrc
     etc/xdg/openbox/
     etc/promptos/picom.conf
-    etc/promptos/tint2rc
     etc/ssh/sshd_config.d/promptos.conf
     etc/vconsole.conf
     etc/dconf/profile/
@@ -121,6 +120,13 @@ chmod 755 /usr/local/bin/promptsh \
           /usr/local/bin/promptos-install 2>/dev/null || true
 chmod 755 /etc/profile.d/promptsh.sh /root/.xinitrc \
           /etc/xdg/openbox/autostart 2>/dev/null || true
+# Ensure the desktop runtime packages the synced configs depend on are present
+# (e.g. plank). --needed skips installed ones; best-effort (needs internet).
+if command -v pacman >/dev/null 2>&1; then
+    pacman -S --needed --noconfirm \
+        plank picom network-manager-applet konsole xdotool wmctrl feh \
+        openbox xorg-server xorg-xinit 2>/dev/null || true
+fi
 # Recompile python bytecode for slightly faster cold start.
 python -m compileall -q /usr/local/lib/promptos/ 2>/dev/null || true
 # Reload sshd if its drop-in changed (idempotent — fine to run regardless).

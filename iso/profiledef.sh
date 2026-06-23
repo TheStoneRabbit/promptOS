@@ -31,7 +31,6 @@ file_permissions=(
   ["/root/.xinitrc"]="0:0:755"
   ["/etc/xdg/openbox/autostart"]="0:0:755"
   ["/etc/xdg/openbox/rc.xml"]="0:0:644"
-  ["/etc/promptos/tint2rc"]="0:0:644"
   ["/etc/promptos/picom.conf"]="0:0:644"
   ["/usr/share/promptos/wallpaper.png"]="0:0:644"
   ["/etc/profile.d/00-promptos-x.sh"]="0:0:644"
