@@ -182,6 +182,9 @@ def install_base():
         "/dev/*", "/proc/*", "/sys/*", "/tmp/*", "/run/*",
         "/mnt/*", "/media/*", "/lost+found",
         "/var/cache/pacman/pkg/*",
+        # Never clone the live environment's fstab — it would carry stale mount
+        # entries onto the target. genfstab regenerates it fresh per machine.
+        "/etc/fstab",
     ]
     # Also exclude /boot — on the live ISO it's a mount point for the ISO boot area,
     # not the kernel installed by pacstrap. We reinstall the kernel in the chroot instead.
@@ -340,8 +343,28 @@ def create_admin_user(username: str, password: str):
 def setup_system(hostname: str, timezone: str, locale: str,
                  root_password: str,
                  admin_user: str | None = None, admin_password: str | None = None):
-    # fstab
-    run(f"genfstab -U {MOUNTPOINT} >> {MOUNTPOINT}/etc/fstab")
+    # fstab — overwrite (not append) so only this machine's partitions are
+    # listed; appending could leave stale entries that fail to mount at boot.
+    run(f"genfstab -U {MOUNTPOINT} > {MOUNTPOINT}/etc/fstab")
+
+    # Mark the ESP (/boot) mount 'nofail' so a flaky/slow/absent EFI partition
+    # at boot doesn't drop the machine into an emergency shell. Root must still
+    # mount, but a missing /boot should never block reaching a usable system.
+    fstab_path = f"{MOUNTPOINT}/etc/fstab"
+    try:
+        with open(fstab_path) as f:
+            lines = f.readlines()
+        new_lines = []
+        for ln in lines:
+            parts = ln.split()
+            if len(parts) >= 4 and parts[1] == "/boot" and "nofail" not in parts[3]:
+                parts[3] = parts[3] + ",nofail"
+                ln = "\t".join(parts) + "\n"
+            new_lines.append(ln)
+        with open(fstab_path, "w") as f:
+            f.writelines(new_lines)
+    except OSError:
+        pass
 
     # Timezone
     run(f"arch-chroot {MOUNTPOINT} ln -sf /usr/share/zoneinfo/{timezone} /etc/localtime")
@@ -368,15 +391,21 @@ def setup_system(hostname: str, timezone: str, locale: str,
     run(f"arch-chroot {MOUNTPOINT} systemctl enable ollama", check=False)
 
     # Replace the live ISO's mkinitcpio.conf with a standard one for installed systems
-    # The live ISO uses archiso hooks which look for the ISO label — that doesn't exist on disk
-    # Skip autodetect so the initramfs includes all modules (works on any hardware)
+    # (the live ISO uses archiso hooks that look for the ISO label, which doesn't
+    # exist on disk).
+    #
+    # IMPORTANT: include `autodetect`. It bundles the storage drivers actually
+    # loaded on THIS machine — including controllers like Intel VMD/RST whose
+    # modules are NOT in mkinitcpio's static `block` set. Without it, on such
+    # machines the root device is never found and the system drops to an
+    # initramfs emergency shell ("device 'UUID=...' not found").
     with open(f"{MOUNTPOINT}/etc/mkinitcpio.conf", "w") as f:
         f.write(
             "# mkinitcpio.conf for installed promptOS\n"
             "MODULES=()\n"
             "BINARIES=()\n"
             "FILES=()\n"
-            "HOOKS=(base udev modconf block filesystems keyboard fsck)\n"
+            "HOOKS=(base udev autodetect modconf block filesystems keyboard fsck)\n"
         )
     run(f"arch-chroot {MOUNTPOINT} mkinitcpio -P", check=False)
 
