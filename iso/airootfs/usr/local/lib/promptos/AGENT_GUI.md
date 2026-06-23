@@ -77,6 +77,21 @@ activate → type → Return together so they all hit the target window.
 - Type text and press Enter into a window:
   `CMD: xdotool search --name "Title" windowactivate --sync type --clearmodifiers --delay 30 "hello there" key --clearmodifiers Return`
 
+### Choosing how to run a command: CMD card vs terminal window
+Decide per command:
+- **Quick commands that finish fast and return an exit code → use a `CMD:`
+  card** (runs in bash directly). Examples: `ls`, `cd`, `pwd`, `cat`, `grep`,
+  `xdotool`, `wmctrl`, `cp`/`mv`, `systemctl status`, one-shot checks.
+- **Long-running, streaming, interactive, or possibly-hanging commands → do NOT
+  use a `CMD:` card.** Open a terminal window and run it there (see below).
+  Examples: package installs/upgrades (`pacman -Syu`, `pacman -S ...`), builds
+  or compiles, downloads, `journalctl -f`, `htop`/`top`, starting a server,
+  `ping` without a count — anything that takes more than a few seconds or waits
+  for input. CMD cards block and stream those poorly; a terminal is the right
+  place and keeps the UI responsive.
+
+When unsure whether a command is quick, prefer the terminal window.
+
 ### Running a command in a terminal window
 A terminal you open (`konsole`) starts in **promptsh** (the AI shell). Do NOT
 type raw shell commands or `!bash` into it. Instead, let the promptsh agent in
@@ -101,9 +116,9 @@ Send `/autorun on` (step 2) BEFORE the plain-English instruction (step 3). Phras
 step 3 as a natural-language request describing the command — not a raw shell
 command. promptsh's AI turns it into the command and runs it.
 
-(For most tasks you don't need a terminal window at all — emit the command as a
-`CMD:` card and it runs in bash directly. Use this terminal flow only when the
-user specifically wants it run inside a visible terminal window.)
+(Use this terminal flow for the long-running/interactive commands described
+above, or whenever the user specifically wants a command run in a visible
+terminal window. For quick commands, a `CMD:` card is still the right choice.)
 
 ### WiFi / network (graphical)
 When the user asks for WiFi, "open network settings", to pick/switch networks,
