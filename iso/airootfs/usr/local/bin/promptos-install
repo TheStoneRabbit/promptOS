@@ -399,10 +399,16 @@ def setup_system(hostname: str, timezone: str, locale: str,
     # modules are NOT in mkinitcpio's static `block` set. Without it, on such
     # machines the root device is never found and the system drops to an
     # initramfs emergency shell ("device 'UUID=...' not found").
+    # Force common storage-controller modules in addition to autodetect, because
+    # autodetect misses some: e.g. Intel VMD/RST (NVMe behind the vmd bridge) and
+    # Intel UFS (ufshcd_pci, on Alder Lake-N and similar low-power machines).
+    # Without the right one, the root device is invisible at boot and the system
+    # drops to an initramfs emergency shell ("device 'UUID=...' not found").
+    # Listing modules a machine lacks is harmless (they just find no devices).
     with open(f"{MOUNTPOINT}/etc/mkinitcpio.conf", "w") as f:
         f.write(
             "# mkinitcpio.conf for installed promptOS\n"
-            "MODULES=()\n"
+            "MODULES=(ufshcd_pci vmd nvme nvme_core ahci sd_mod)\n"
             "BINARIES=()\n"
             "FILES=()\n"
             "HOOKS=(base udev autodetect modconf block filesystems keyboard fsck)\n"
