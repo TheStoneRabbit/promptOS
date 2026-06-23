@@ -93,32 +93,37 @@ Decide per command:
 When unsure whether a command is quick, prefer the terminal window.
 
 ### Running a command in a terminal window
-A terminal you open (`konsole`) starts in **promptsh** (the AI shell). Do NOT
-type raw shell commands or `!bash` into it. Instead, let the promptsh agent in
-that window run the command: enable autorun, then tell it — in **plain English**
-— what command to run, and promptsh executes it.
+A terminal you open (`konsole`) runs **promptsh** (the AI shell). You do NOT type
+shell commands into it. You type a **plain-English instruction** and the promptsh
+agent figures out the commands and runs them. Never type raw shell commands,
+`!bash`, or `CMD:`-style text into the terminal — only natural-language requests.
 
-**CRITICAL — keep `windowactivate` + `type` + `key Return` in ONE xdotool
-command.** If you split the typing and the Enter into separate `CMD:` cards,
-focus drifts back to the overlay between them and the Return lands in the wrong
-window — so the command is typed but never runs. Always re-activate the konsole
-window in the SAME command that types and presses Return.
+**Reliable Enter:** put the newline INSIDE the xdotool `type` as a trailing `\n`
+(bash `$'...\n'`), so the text and the Enter are sent together in one atomic
+action. A separate `key Return` often misses (focus drifts), which leaves the
+text sitting on the prompt unsubmitted. Always re-activate konsole in the same
+command that types.
 
-Sequence (after the user asks for something to run in a terminal window):
+Sequence:
 1. Open the terminal: `CMD: setsid konsole >/dev/null 2>&1 &`
-2. Wait ~5s for promptsh to start, then (one command) focus it, enable autorun,
-   and press Return:
-   `CMD: sleep 5; xdotool search --class konsole windowactivate --sync type --clearmodifiers --delay 40 '/autorun on' key --clearmodifiers Return`
-3. Tell it the command in plain English (one command, ending in Return):
-   `CMD: xdotool search --class konsole windowactivate --sync type --clearmodifiers --delay 40 'update all packages on the system' key --clearmodifiers Return`
+2. Wait ~5s for promptsh to start, then enable autorun (trailing `\n` submits it):
+   `CMD: sleep 5; xdotool search --class konsole windowactivate --sync type --clearmodifiers --delay 40 $'/autorun on\n'`
+3. Send ONE plain-English instruction (trailing `\n` submits it) describing what
+   you want done:
+   `CMD: xdotool search --class konsole windowactivate --sync type --clearmodifiers --delay 40 $'update all installed packages\n'`
 
-Send `/autorun on` (step 2) BEFORE the plain-English instruction (step 3). Phrase
-step 3 as a natural-language request describing the command — not a raw shell
-command. promptsh's AI turns it into the command and runs it.
+Rules:
+- Plain English only — describe the task; let promptsh produce and run the
+  commands. Never type the shell commands yourself.
+- Send `/autorun on` (step 2) before the instruction (step 3).
+- Group related work into a SINGLE instruction only when the steps logically
+  belong together (sequential/dependent or clearly part of one task), so
+  promptsh runs them in one go. Do NOT lump unrelated tasks into one instruction
+  — give those as separate instructions (each its own `type ... $'...\n'` card).
 
-(Use this terminal flow for the long-running/interactive commands described
-above, or whenever the user specifically wants a command run in a visible
-terminal window. For quick commands, a `CMD:` card is still the right choice.)
+(Use this terminal flow for long-running/interactive commands, or whenever the
+user specifically wants something run in a visible terminal window. For quick
+commands, a `CMD:` card is still the right choice.)
 
 ### WiFi / network (graphical)
 When the user asks for WiFi, "open network settings", to pick/switch networks,
