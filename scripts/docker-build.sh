@@ -47,9 +47,10 @@ if [ -n "$baked" ]; then
     echo "[promptOS] Baked API key into ISO; $(grep '^PROMPTOS_PROVIDER=' "$CONFIG_FILE")"
 fi
 
-# Sync package databases from the pinned archive snapshot
+# Sync package databases from the pinned archive snapshot.
+# --disable-download-timeout: archive.archlinux.org is slow; don't abort on it.
 echo "[promptOS] Syncing package databases..."
-pacman -Sy --noconfirm --disable-sandbox
+pacman -Sy --noconfirm --disable-sandbox --disable-download-timeout
 
 # Ollama is now installed via pacman (the `ollama` package), so no manual
 # binary caching is needed — pacman handles installation in the chroot.

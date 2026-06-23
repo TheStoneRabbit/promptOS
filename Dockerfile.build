@@ -12,8 +12,10 @@ RUN echo "Server = https://archive.archlinux.org/repos/${ARCH_SNAPSHOT}/\$repo/o
 # Update and install archiso
 # --disable-sandbox is required when running pacman inside Docker on macOS
 # (seccomp syscall restrictions block pacman's sandbox user switching)
-RUN pacman -Syu --noconfirm --disable-sandbox && \
-    pacman -S --noconfirm --disable-sandbox archiso git python && \
+# --disable-download-timeout: archive.archlinux.org is often very slow and
+# pacman otherwise aborts on "Operation too slow" (<1 byte/sec for 10s).
+RUN pacman -Syu --noconfirm --disable-sandbox --disable-download-timeout && \
+    pacman -S --noconfirm --disable-sandbox --disable-download-timeout archiso git python && \
     pacman -Scc --noconfirm
 
 # Working directory inside the container
