@@ -626,6 +626,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._current_proc = None          # Popen of the running command, if any
         self._commands_cancelled = False   # set by Stop to halt the queue
         self._halted = False               # set by Stop: gate ALL async LLM follow-ups
+        self._sudo_password = None         # in-memory only; cached for this session
         self.autorun_commands = False
         self.suggested_next_text = ""
         self.suggested_next_items: list[str] = []
@@ -2340,61 +2341,70 @@ os.replace(tmp_path, path)
 
         needs_sudo = self._has_explicit_sudo(command)
         has_inline_sudo = self._has_inline_sudo(command)
-        askpass_path = None
-        env = os.environ.copy()
-        run_args: list[str]
+
         if needs_sudo or has_inline_sudo:
-            password = self._prompt_sudo_password()
-            if password is None:
-                return 1, "sudo cancelled by user"
-            askpass_path = self._create_askpass_helper()
-            env["SUDO_ASKPASS"] = askpass_path
-            env["PROMPTOS_SUDO_PASS"] = password
-            if needs_sudo:
-                cmd_no_sudo = self._strip_leading_sudo(command)
-                run_args = ["sudo", "-A", "bash", "-lc", cmd_no_sudo]
-            else:
-                rewritten = self._inject_inline_sudo_flags(command)
-                run_args = ["bash", "-lc", rewritten]
-        else:
-            run_args = ["bash", "-lc", command]
+            return self._run_with_sudo(command, needs_sudo, has_inline_sudo, progress_callback)
 
-        try:
-            returncode, output = self._run_process_streaming(run_args, env, progress_callback)
-        finally:
-            if askpass_path:
-                try:
-                    os.remove(askpass_path)
-                except OSError:
-                    pass
+        # No sudo requested: run plainly.
+        returncode, output = self._run_process_streaming(
+            ["bash", "-lc", command], os.environ.copy(), progress_callback
+        )
 
+        # If it failed only for lack of privileges, retry once under sudo.
         if (
             returncode != 0
-            and not (needs_sudo or has_inline_sudo)
             and os.geteuid() != 0
             and self._should_retry_with_sudo(command, output)
         ):
-            password = self._prompt_sudo_password()
+            if progress_callback:
+                progress_callback("Retrying with sudo...", None)
+            return self._run_with_sudo(
+                command, needs_sudo=False, has_inline_sudo=False,
+                progress_callback=progress_callback, wrap_in_sudo=True,
+            )
+        return returncode, output
+
+    def _run_with_sudo(
+        self,
+        command: str,
+        needs_sudo: bool,
+        has_inline_sudo: bool,
+        progress_callback: Callable[[str, float | None], None] | None = None,
+        wrap_in_sudo: bool = False,
+    ) -> tuple[int, str]:
+        # argv for this command (independent of the password).
+        if wrap_in_sudo:
+            run_args = ["sudo", "-A", "bash", "-lc", command]
+        elif needs_sudo:
+            run_args = ["sudo", "-A", "bash", "-lc", self._strip_leading_sudo(command)]
+        else:  # has_inline_sudo
+            run_args = ["bash", "-lc", self._inject_inline_sudo_flags(command)]
+
+        # Two attempts: the password is cached for the session, so it's normally
+        # entered once. If it's wrong, drop the cache and re-prompt once so a
+        # stale cache can't silently fail every command.
+        returncode, output = 1, "sudo cancelled by user"
+        for attempt in range(2):
+            password = self._prompt_sudo_password(force=(attempt > 0))
             if password is None:
-                return returncode, output + "\n\nsudo cancelled by user"
+                return 1, "sudo cancelled by user"
             askpass_path = self._create_askpass_helper()
-            env_retry = os.environ.copy()
-            env_retry["SUDO_ASKPASS"] = askpass_path
-            env_retry["PROMPTOS_SUDO_PASS"] = password
+            env = os.environ.copy()
+            env["SUDO_ASKPASS"] = askpass_path
+            env["PROMPTOS_SUDO_PASS"] = password
             try:
-                if progress_callback:
-                    progress_callback("Retrying with sudo...", None)
-                retry_code, retry_output = self._run_process_streaming(
-                    ["sudo", "-A", "bash", "-lc", command],
-                    env_retry,
-                    progress_callback,
-                )
+                returncode, output = self._run_process_streaming(run_args, env, progress_callback)
             finally:
                 try:
                     os.remove(askpass_path)
                 except OSError:
                     pass
-            return retry_code, retry_output
+            if returncode != 0 and attempt == 0 and self._sudo_auth_failed(output):
+                self._sudo_password = None   # wrong password — drop the cache
+                if progress_callback:
+                    progress_callback("Incorrect password — try again...", None)
+                continue
+            break
         return returncode, output
 
     def _run_process_streaming(
@@ -2633,7 +2643,21 @@ os.replace(tmp_path, path)
         }
         return parts[0] in privileged and any(p.startswith("/etc/") or p.startswith("/usr/") for p in parts[1:])
 
-    def _prompt_sudo_password(self) -> str | None:
+    def _sudo_auth_failed(self, output: str) -> bool:
+        t = (output or "").lower()
+        return (
+            "incorrect password" in t
+            or "sorry, try again" in t
+            or "incorrect password attempt" in t
+            or "authentication failure" in t
+        )
+
+    def _prompt_sudo_password(self, force: bool = False) -> str | None:
+        # Cached in memory for the session so the password is entered once per
+        # GUI run. `force=True` (after a wrong password) ignores the cache.
+        if not force and self._sudo_password is not None:
+            return self._sudo_password
+
         result: dict[str, str | None] = {"password": None}
         done = threading.Event()
 
@@ -2673,7 +2697,10 @@ os.replace(tmp_path, path)
 
         GLib.idle_add(_show_dialog)
         done.wait()
-        return result["password"]
+        pw = result["password"]
+        if pw is not None:
+            self._sudo_password = pw   # cache for the rest of this session
+        return pw
 
     def _set_suggested_next_items(self, items: list[str]):
         self.suggested_next_items = [i for i in items if i]
