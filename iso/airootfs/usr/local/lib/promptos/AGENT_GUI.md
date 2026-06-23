@@ -66,13 +66,16 @@ just tell the user to do it by hand — offer to do it FOR them, then act on yes
 - Focus by visible name: `CMD: xdotool search --name "Mozilla Firefox" windowactivate %1`
 
 ### Typing into applications (keyboard injection)
-Always focus the target window first, then type. Use `--clearmodifiers`.
-- Activate then type a URL and submit:
-  `CMD: xdotool search --class firefox windowactivate --sync key --clearmodifiers ctrl+l`
-  `CMD: xdotool type --clearmodifiers --delay 40 "https://example.com"`
-  `CMD: xdotool key --clearmodifiers Return`
-- Send a keystroke to the focused window: `CMD: xdotool key --clearmodifiers ctrl+s`
-- Type free text into the focused field: `CMD: xdotool type --delay 30 "hello there"`
+**Chain `windowactivate` + `type` + `key` in ONE xdotool command.** If you put
+the typing and the Enter in separate `CMD:` cards, focus drifts back to the
+overlay between them and the keystroke goes to the wrong window. Keep
+activate → type → Return together so they all hit the target window.
+- Activate, type a URL, and submit — all in one command:
+  `CMD: xdotool search --class firefox windowactivate --sync key --clearmodifiers ctrl+l type --clearmodifiers --delay 40 "https://example.com" key --clearmodifiers Return`
+- One keystroke into a specific window:
+  `CMD: xdotool search --class firefox windowactivate --sync key --clearmodifiers ctrl+s`
+- Type text and press Enter into a window:
+  `CMD: xdotool search --name "Title" windowactivate --sync type --clearmodifiers --delay 30 "hello there" key --clearmodifiers Return`
 
 ### Running a command in a terminal window
 A terminal you open (`konsole`) starts in **promptsh** (the AI shell). Do NOT
@@ -80,19 +83,23 @@ type raw shell commands or `!bash` into it. Instead, let the promptsh agent in
 that window run the command: enable autorun, then tell it — in **plain English**
 — what command to run, and promptsh executes it.
 
+**CRITICAL — keep `windowactivate` + `type` + `key Return` in ONE xdotool
+command.** If you split the typing and the Enter into separate `CMD:` cards,
+focus drifts back to the overlay between them and the Return lands in the wrong
+window — so the command is typed but never runs. Always re-activate the konsole
+window in the SAME command that types and presses Return.
+
 Sequence (after the user asks for something to run in a terminal window):
 1. Open the terminal: `CMD: setsid konsole >/dev/null 2>&1 &`
-2. Wait ~5 seconds for promptsh to finish starting, focus it, and turn on
-   autorun so it runs without asking:
-   `CMD: sleep 5; xdotool search --class konsole windowactivate --sync type --clearmodifiers '/autorun on'`
-   `CMD: xdotool key --clearmodifiers Return`
-3. Tell it, in plain English, what command to run, then submit:
-   `CMD: xdotool type --clearmodifiers 'update all packages on the system'`
-   `CMD: xdotool key --clearmodifiers Return`
+2. Wait ~5s for promptsh to start, then (one command) focus it, enable autorun,
+   and press Return:
+   `CMD: sleep 5; xdotool search --class konsole windowactivate --sync type --clearmodifiers --delay 40 '/autorun on' key --clearmodifiers Return`
+3. Tell it the command in plain English (one command, ending in Return):
+   `CMD: xdotool search --class konsole windowactivate --sync type --clearmodifiers --delay 40 'update all packages on the system' key --clearmodifiers Return`
 
-Always send `/autorun on` (step 2) BEFORE the plain-English instruction (step 3).
-Phrase step 3 as a natural-language request describing the command to run — not
-a raw shell command. promptsh's AI turns it into the command and runs it.
+Send `/autorun on` (step 2) BEFORE the plain-English instruction (step 3). Phrase
+step 3 as a natural-language request describing the command — not a raw shell
+command. promptsh's AI turns it into the command and runs it.
 
 (For most tasks you don't need a terminal window at all — emit the command as a
 `CMD:` card and it runs in bash directly. Use this terminal flow only when the
