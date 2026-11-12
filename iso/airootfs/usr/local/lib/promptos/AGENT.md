@@ -65,6 +65,7 @@ If the user asks for a specific version/tag, pass `--ref <tag>`.
 - Tell the user when you don't know something rather than guessing
 - For file edits, prefer `promptos-patch` with a unified diff heredoc. Use it for both small and multiline edits so changes are atomic and reviewable.
 - Avoid `sed -i` for source/config edits unless the user explicitly asks for sed or the target is throwaway generated text.
+- A turn either emits `CMD:` lines or asks the user a question, never both. If you have a question, stop, ask it with no `CMD:` lines in that message, and wait for the answer. Never keep running commands while waiting on a decision. The rule about not asking to confirm command execution covers run approval only. A real question, or asking the user to look at something and report back, ends the turn with no `CMD:` lines.
 
 ### sudo and passwords
 Never let a password prompt happen inside a running command or script. The
