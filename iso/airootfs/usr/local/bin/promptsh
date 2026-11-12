@@ -44,6 +44,7 @@ try:
     from rich.panel import Panel
     from rich.text import Text
     from rich.live import Live
+    from rich.markup import escape as rich_escape
     from rich import box
     RICH = not _BARE_TTY
     console = Console() if RICH else None
@@ -322,6 +323,50 @@ def show_output_log(arg: str = ""):
 def _set_verbose(enabled: bool):
     global VERBOSE_OUTPUT
     VERBOSE_OUTPUT = bool(enabled)
+
+
+def _needs_sudo_password(cmd: str) -> bool:
+    """True if `cmd` invokes sudo and sudo would have to ask for a password now."""
+    try:
+        if os.geteuid() == 0:
+            return False
+    except AttributeError:
+        return False
+    import re
+    if not re.search(r"(?:^|[;&|(])\s*sudo(?:\s|$)", cmd):
+        return False
+    try:
+        return subprocess.run(["sudo", "-n", "true"], capture_output=True, timeout=5).returncode != 0
+    except Exception:
+        return True
+
+
+def _preauth_sudo() -> bool:
+    """Ask for the sudo password up front on the real terminal, where the user
+    can see the prompt, instead of letting sudo prompt inside the output pipe
+    where the compact status line would hide it."""
+    msg = "This command needs your password (sudo)."
+    if RICH:
+        console.print(f"[bold yellow]{msg}[/bold yellow]")
+    else:
+        print(f"\033[1;33m{msg}\033[0m")
+    try:
+        return subprocess.run(["sudo", "-v"]).returncode == 0
+    except KeyboardInterrupt:
+        print()
+        return False
+
+
+def _looks_like_prompt(text: str) -> bool:
+    """Heuristic: an unterminated output line that is waiting for the user."""
+    import re
+    t = text.strip().lower()
+    if not t:
+        return False
+    return bool(re.search(
+        r"password|passphrase|\[y/n\]|\(y/n\)|\[yes/no\]|\(yes/no\)|\[y/n/\?\]|"
+        r"proceed\?|continue\?|press (enter|any key|return)|enter a number|are you sure",
+        t))
 
 
 
@@ -797,9 +842,9 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
 
         # Header — yellow with a leading marker so it's obviously a command.
         if RICH:
-            console.print(f"\n[bold yellow]▶[/bold yellow] [yellow]{cmd}[/yellow]")
+            console.print(f"\n[bold yellow]▶[/bold yellow] [yellow]{rich_escape(cmd)}[/yellow]")
             if notes:
-                console.print(f"[dim]{'; '.join(notes)}[/dim]")
+                console.print(f"[dim]{rich_escape('; '.join(notes))}[/dim]")
         else:
             print(f"\n\033[1;33m▶\033[0m \033[33m{cmd}\033[0m")
             if notes:
@@ -845,6 +890,17 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
             results.append({"cmd": cmd, "exit_code": 0 if ok else 1, "output": msg})
             continue
 
+        # sudo would prompt inside the pipe, where the compact status line hides
+        # it and the user only finds out when their keystrokes go to the wrong
+        # place. Authenticate first, visibly, on the real TTY.
+        if _needs_sudo_password(cmd):
+            if not _preauth_sudo():
+                print("\033[2m└─\033[0m \033[31msudo authentication failed — command not run\033[0m")
+                _remember_output(cmd, 1, "sudo authentication failed")
+                results.append({"cmd": cmd, "exit_code": 1,
+                                "output": "sudo authentication failed (password not accepted); command not run"})
+                continue
+
         proc = subprocess.Popen(
             cmd, shell=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -855,31 +911,33 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
         LINE_PREFIX = "\033[2m┃\033[0m "
         PREFIX_VIS = 2  # visible width of "┃ "
 
-        def _emit_verbose(line: str):
-            """Verbose mode: print one output line with the ┃ prefix, wrapping
-            at terminal width ourselves so continuation rows keep the prefix,
-            and re-emitting the prefix after \\r so progress bars stay inside."""
-            cols = _term_cols()
-            inner = cols - PREFIX_VIS
-            has_nl = line.endswith("\n")
-            body = line.rstrip("\n")
-            parts = body.split("\r")
+        v_at_start = True   # verbose writer: are we at the start of a visual row?
+        v_col = 0           # verbose writer: visible column within the row
+
+        def _vwrite(text: str):
+            """Verbose mode: write raw output as it arrives (partial lines
+            included, so prompts show up), prefixing every visual row with ┃,
+            wrapping at terminal width ourselves so continuation rows keep the
+            prefix, and re-emitting it after \r so progress bars stay inside."""
+            nonlocal v_at_start, v_col
+            inner = _term_cols() - PREFIX_VIS
             out = []
-            for pi, chunk in enumerate(parts):
-                if not chunk:
-                    out.append(LINE_PREFIX)
-                else:
-                    j, first = 0, True
-                    while j < len(chunk):
-                        if not first:
-                            out.append("\n")
-                        out.append(LINE_PREFIX + chunk[j:j + inner])
-                        j += inner
-                        first = False
-                if pi < len(parts) - 1:
-                    out.append("\r")
-            if has_nl:
-                out.append("\n")
+            for piece in _re2.split(r"(\r\n|\n|\r)", text):
+                if piece in ("\r\n", "\n"):
+                    out.append("\n"); v_at_start = True; v_col = 0
+                elif piece == "\r":
+                    out.append("\r"); v_at_start = True; v_col = 0
+                elif piece:
+                    i = 0
+                    while i < len(piece):
+                        if v_at_start:
+                            out.append(LINE_PREFIX); v_at_start = False; v_col = 0
+                        room = inner - v_col
+                        if room <= 0:
+                            out.append("\n"); v_at_start = True; v_col = 0
+                            continue
+                        seg = piece[i:i + room]
+                        out.append(seg); i += len(seg); v_col += len(seg)
             sys.stdout.write("".join(out))
             sys.stdout.flush()
 
@@ -887,7 +945,7 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
         started = time.monotonic()
         raw = bytearray()
         pending = b""        # bytes after the last \n or \r (an unfinished line)
-        vpending = ""        # verbose mode: text not yet terminated by \n
+        prompt_open = False  # compact mode: we've printed a waiting prompt on its own row
         last_line = ""       # most recent completed segment, for the status line
         tick = 0
         status_shown = False
@@ -898,7 +956,10 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
             elapsed = _fmt_elapsed(time.monotonic() - started)
             cols = _term_cols()
             head = f"{spinner[tick % len(spinner)]} {elapsed}"
-            tail = _clip(last_line.strip(), max(10, cols - len(head) - 4))
+            # Prefer the unfinished line (what the program is saying right now)
+            # over the last completed one.
+            live = pending.decode("utf-8", "replace").strip() or last_line.strip()
+            tail = _clip(live, max(10, cols - len(head) - 4))
             line = f"\033[2m{head}\033[0m  {tail}" if tail else f"\033[2m{head}\033[0m"
             sys.stdout.write("\r\033[2K" + line)
             sys.stdout.flush()
@@ -914,18 +975,30 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
                         break
                     raw += data
                     pending += data
+                    if prompt_open:
+                        # The program moved on (user answered) — close the prompt row.
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        prompt_open = False
                     # Split on \n or \r; the final piece is still in progress.
                     segs = _re2.split(rb"\r\n|\n|\r", pending)
                     pending = segs.pop()
                     if segs:
                         last_line = segs[-1].decode("utf-8", "replace")
                     if VERBOSE_OUTPUT:
-                        # Emit whole lines only; _emit_verbose handles \r inside a line.
-                        vpending += data.decode("utf-8", "replace")
-                        while "\n" in vpending:
-                            ln, vpending = vpending.split("\n", 1)
-                            _emit_verbose(ln + "\n")
-                if not VERBOSE_OUTPUT:
+                        _vwrite(data.decode("utf-8", "replace"))
+                    else:
+                        ptxt = pending.decode("utf-8", "replace")
+                        if _looks_like_prompt(ptxt):
+                            # Something is waiting for input: put the prompt on
+                            # its own row, bold, and park the cursor after it.
+                            if status_shown:
+                                sys.stdout.write("\r\033[2K")
+                                status_shown = False
+                            sys.stdout.write(f"\033[2m┃\033[0m \033[1m{ptxt.strip()}\033[0m ")
+                            sys.stdout.flush()
+                            prompt_open = True
+                if not VERBOSE_OUTPUT and not prompt_open:
                     _status()
         except KeyboardInterrupt:
             proc.terminate()
@@ -935,8 +1008,12 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
                 proc.kill()
             interrupted = True
         proc.wait()
-        if VERBOSE_OUTPUT and vpending:
-            _emit_verbose(vpending + "\n")
+        if VERBOSE_OUTPUT and not v_at_start:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        if prompt_open:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
         if status_shown:
             sys.stdout.write("\r\033[2K")
             sys.stdout.flush()
