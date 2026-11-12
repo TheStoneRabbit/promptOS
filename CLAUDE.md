@@ -90,12 +90,11 @@ ssh root@localhost -p 2222  # clipboard/copy-paste via SSH
 - **`AGENT.md`** — AI identity/ruleset loaded as system prompt
   - Located at `/usr/local/lib/promptos/AGENT.md`
   - Defines AI as promptOS system agent with full root access
-- **Ollama baked into ISO**
-  - Installed via `customize_airootfs.sh` (runs in chroot after pacstrap)
-  - `llama3.2:1b` pre-pulled and included in ISO
-  - Model cache persisted in Docker volume `promptos-ollama-cache` between builds
+- **Ollama installed (offline fallback)**
+  - Installed via pacman (`ollama` package); service enabled in `customize_airootfs.sh`
+  - No model is baked into the ISO — `qwen3:8b` is pulled on demand with `promptos-model pull` / `/model pull`
   - Starts automatically via `ollama.service` (systemd, multi-user.target)
-  - Default provider in config: `PROMPTOS_PROVIDER=ollama`
+  - Default provider in config: `PROMPTOS_PROVIDER=claude` (Ollama + `qwen3:8b` is the offline fallback, downloaded on demand via `promptos-model pull`)
 
 ### Phase 3–5 — Planned
 See roadmap below.
@@ -178,10 +177,10 @@ All `pacman` calls inside Docker need `--disable-sandbox` (seccomp restriction).
 
 ## AI Model Strategy
 
-- **Local-first**: Ollama + `llama3.2:1b` baked into the ISO — works offline, no API key needed
-- **Cloud fallback**: Claude API (`claude-sonnet-4-6`) for complex reasoning tasks
-- **Provider priority**: ollama → claude → openai (auto-detected at startup)
-- **Override**: set `PROMPTOS_PROVIDER=claude` in `/etc/promptos/config` or env
+- **Claude-first**: default provider is Claude API (`claude-opus-5-5`). Decided 2026-11-11: no small local model is reliable enough for multi-step root shell work, so Claude is the base model.
+- **Offline fallback**: Ollama + `qwen3:8b` (best small tool-use model as of late 2026; not baked into the ISO, pulled on demand with `promptos-model pull`)
+- **Provider priority (auto mode)**: claude → openai → groq → ollama
+- **Override**: set `PROMPTOS_PROVIDER=ollama|openai|groq|auto` in `/etc/promptos/config` or env; API keys via `promptos-keys set claude <key>`
 - System context (hostname, uptime, disk, running services) injected into AI system prompt at session start
 
 ---

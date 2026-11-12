@@ -206,7 +206,7 @@ PROMPTOS_CONVERSATION_MODEL = os.environ.get("PROMPTOS_CONVERSATION_MODEL", "gpt
 PROMPTOS_EDIT_MODEL = os.environ.get("PROMPTOS_EDIT_MODEL", "gpt-5-mini")
 MODEL_CATALOG_HINTS = {
     "openai": ["gpt-5-nano", "gpt-5-mini", "gpt-5", "gpt-4.1"],
-    "claude": ["claude-sonnet-4-6", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
+    "claude": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
     "groq": ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
 }
 DETACH_COMMANDS = {"firefox", "chromium", "google-chrome", "brave", "code", "nautilus", "thunar"}

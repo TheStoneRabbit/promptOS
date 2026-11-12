@@ -13,7 +13,7 @@ from .base import Provider, Message
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-opus-5-5"
 MAX_TOKENS = 8096
 
 
@@ -75,6 +75,12 @@ class ClaudeProvider(Provider):
                                 chunk = data.get("delta", {}).get("text", "")
                                 if chunk:
                                     yield chunk
+                            elif data.get("type") == "message_delta":
+                                # Claude 5-family safety classifiers can end a turn with
+                                # stop_reason "refusal" and empty content — say so instead
+                                # of showing a blank reply.
+                                if data.get("delta", {}).get("stop_reason") == "refusal":
+                                    yield "[Claude declined this request.]"
                         except json.JSONDecodeError:
                             pass
             else:

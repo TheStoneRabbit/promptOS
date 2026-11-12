@@ -17,7 +17,7 @@ The traditional shell is still available as an escape hatch (`!cmd`), but it's n
 ## Features
 
 - **Multi-provider AI**: auto-selects the best available — Claude, OpenAI, Groq, or Ollama (local/offline)
-- **`mistral:7b-instruct` baked in**: instruction-tuned model pre-installed, no internet or API key required
+- **Claude by default**: `claude-opus-5-5` is the base model; add a key with `/setup` on first boot
 - **Root access**: AI runs as root with full system control
 - **Auto-fallback**: if a provider fails, automatically switches to the next available one
 - **Installer**: type `install promptOS` to install to disk from a USB drive
@@ -35,7 +35,7 @@ brew install docker qemu
 
 **To run** (target hardware):
 - x86_64 machine, UEFI or BIOS
-- 8GB RAM minimum (for `mistral:7b-instruct`); 16GB+ recommended if you swap in larger models
+- Any RAM works with a cloud provider; 8GB+ if you use the offline `qwen3:8b` fallback
 - Any disk size for live use; 20GB+ recommended for install
 
 ---
@@ -46,7 +46,7 @@ brew install docker qemu
 ./scripts/build.sh
 ```
 
-Builds the ISO using Docker + archiso. The first build downloads `mistral:7b-instruct` and caches it in a Docker volume (`promptos-ollama-cache`) — subsequent builds reuse the cache and are much faster.
+Builds the ISO using Docker + archiso. Package downloads are cached in a Docker volume (`promptos-pacman-cache`) — subsequent builds reuse the cache and are much faster.
 
 Output: `dist/promptos-YYYY.MM.DD-x86_64.iso`
 
@@ -64,7 +64,7 @@ Boots the latest ISO in QEMU with 4GB RAM and SSH forwarding on `localhost:2222`
 ssh root@localhost -p 2222
 ```
 
-> Note: Ollama loads `mistral:7b-instruct` into RAM on first use; startup time depends on hardware.
+> Note: if you switch to the offline Ollama provider, it loads `qwen3:8b` into RAM on first use; startup time depends on hardware.
 
 ---
 
@@ -95,7 +95,7 @@ The installer will:
 5. Copy the live system to disk, install bootloader, set login shells
 6. Reboot into the installed system
 
-The Ollama model (`mistral:7b-instruct`) is downloaded on first run, not baked
+The Ollama model (`qwen3:8b`) is downloaded on first run, not baked
 into the ISO. Make sure you're online (use `/wifi` if not) and run `/model pull`
 or just send your first AI prompt to trigger the download.
 
@@ -149,10 +149,10 @@ Auto-selected at boot in priority order:
 
 | Provider | Requires | Model |
 |----------|----------|-------|
-| `claude` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
+| `claude` | `ANTHROPIC_API_KEY` | `claude-opus-5-5` (default provider) |
 | `openai` | `OPENAI_API_KEY` | `gpt-5-mini` |
 | `groq` | `GROQ_API_KEY` (free at console.groq.com) | `llama-3.1-8b-instant` |
-| `ollama` | Nothing (baked in) | `mistral:7b-instruct` (offline) |
+| `ollama` | Nothing (download with `promptos-model pull`) | `qwen3:8b` (offline fallback) |
 
 **Set API keys:**
 ```
@@ -230,7 +230,7 @@ promptOS/
 
 - [x] Bootable Arch ISO with auto-login
 - [x] AI shell (`promptsh`) with multi-provider support
-- [x] `mistral:7b-instruct` baked in (offline, instruction-tuned)
+- [x] Claude as default provider; `qwen3:8b` offline fallback via `/model pull`
 - [x] Groq provider (free cloud)
 - [x] Auto-fallback between providers
 - [x] Disk installer (`install promptOS`)

@@ -1128,7 +1128,7 @@ def _ollama_model_installed() -> bool:
         ).stdout
     except Exception:
         return False
-    target = os.environ.get("PROMPTOS_OLLAMA_MODEL", "mistral:7b-instruct")
+    target = os.environ.get("PROMPTOS_OLLAMA_MODEL", "qwen3:8b")
     for line in out.splitlines()[1:]:
         if line.split()[:1] == [target]:
             return True
@@ -1136,7 +1136,7 @@ def _ollama_model_installed() -> bool:
 
 
 def _print_model_missing_notice():
-    target = os.environ.get("PROMPTOS_OLLAMA_MODEL", "mistral:7b-instruct")
+    target = os.environ.get("PROMPTOS_OLLAMA_MODEL", "qwen3:8b")
     if RICH:
         console.print(Panel(
             f"[yellow]Local model [bold]{target}[/bold] is not yet installed.[/yellow]\n\n"
@@ -1151,6 +1151,24 @@ def _print_model_missing_notice():
         print("  Connect to wifi:  /wifi")
         print("  Then download:    /model pull")
         print("  Or use cloud:     /setup\n")
+
+
+def _print_provider_unavailable_notice(name: str):
+    hint = "no API key set" if name in ("claude", "openai", "groq") else "not running"
+    if RICH:
+        console.print(Panel(
+            f"[yellow]Configured provider [bold]{name}[/bold] is unavailable ({hint}).[/yellow]\n\n"
+            f"  • Connect to wifi: [cyan]/wifi[/cyan]\n"
+            f"  • Add a key:       [cyan]/setup[/cyan]\n\n"
+            f"[dim]Or go offline with the local model: [cyan]/switch ollama[/cyan] then [cyan]/model pull[/cyan][/dim]",
+            border_style="yellow",
+            box=box.ROUNDED,
+        ))
+    else:
+        print(f"\n\033[33mConfigured provider {name} is unavailable ({hint}).\033[0m")
+        print("  Connect to wifi:  /wifi")
+        print("  Add a key:        /setup")
+        print("  Or go offline:    /switch ollama, then /model pull\n")
 
 
 def _handle_shell_invocation():
@@ -1222,6 +1240,12 @@ def main():
     # show a clear notice with the path to fix it.
     if provider and provider.name == "ollama" and not _ollama_model_installed():
         _print_model_missing_notice()
+
+    # Default provider is claude, which needs an API key. On a fresh boot with no
+    # key the override resolves to None — point the user at /setup instead of
+    # silently showing "no provider".
+    if provider is None and override not in (None, "", "auto"):
+        _print_provider_unavailable_notice(override)
 
     history: list[Message] = [Message("system", get_system_prompt())]
     active_provider = provider
