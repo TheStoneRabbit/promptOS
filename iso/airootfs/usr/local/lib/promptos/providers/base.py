@@ -14,6 +14,27 @@ class Message:
     content: str
 
 
+# Conversation history is resent in full on every request (the APIs are
+# stateless), so a long session grows linearly in cost. Cap the number of
+# non-system messages; when the cap is hit, drop the oldest half in one go
+# rather than one-per-turn so the retained prefix stays byte-identical for
+# many turns and prompt caching keeps hitting.
+MAX_HISTORY_MESSAGES = 60
+
+
+def bound_history(messages: list["Message"], max_messages: int = MAX_HISTORY_MESSAGES) -> list["Message"]:
+    """Return a copy of `messages` trimmed to the system prompt + recent turns."""
+    system = [m for m in messages if m.role == "system"]
+    rest = [m for m in messages if m.role != "system"]
+    if len(rest) <= max_messages:
+        return list(messages)
+    keep = rest[-(max_messages // 2):]
+    # Conversations must open with a user turn; drop a dangling assistant lead-in.
+    while keep and keep[0].role != "user":
+        keep.pop(0)
+    return system + keep
+
+
 class Provider(ABC):
     """Abstract base class for all AI providers."""
 

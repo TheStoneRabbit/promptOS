@@ -16,6 +16,7 @@ import shlex
 sys.path.insert(0, "/usr/local/lib/promptos")
 
 from providers import get_provider, list_providers, Message
+from providers.base import bound_history
 import providers as _providers_module
 
 MODEL_ENV_BY_PROVIDER = {
@@ -1068,6 +1069,11 @@ def print_model_verification(active_provider):
         f"  active model:    {active_model}",
         f"  provider config: {override}",
         f"  available:       {'yes' if active_provider.available() else 'no'}",
+    ]
+    usage_fn = getattr(active_provider, "usage_summary", None)
+    if callable(usage_fn) and usage_fn():
+        lines.append(f"  tokens:          {usage_fn()}")
+    lines += [
         "",
         "Configured models:",
     ]
@@ -1582,14 +1588,14 @@ def main():
                             refresh_per_second=8,
                             vertical_overflow="visible",
                         ) as live:
-                            for chunk in active_provider.chat(turn_history, stream=True):
+                            for chunk in active_provider.chat(bound_history(turn_history), stream=True):
                                 response_chunks.append(chunk)
                                 live.update(Markdown("".join(response_chunks)))
                         response = "".join(response_chunks)
                         console.print()
                     else:
                         print(f"\n\033[90m[{active_provider.name}]\033[0m ", end="", flush=True)
-                        for chunk in active_provider.chat(turn_history, stream=True):
+                        for chunk in active_provider.chat(bound_history(turn_history), stream=True):
                             print(chunk, end="", flush=True)
                             response_chunks.append(chunk)
                         response = "".join(response_chunks)

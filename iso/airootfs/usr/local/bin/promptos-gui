@@ -54,6 +54,7 @@ import sys
 
 sys.path.insert(0, "/usr/local/lib/promptos")
 from providers import Message, get_provider, list_providers
+from providers.base import bound_history
 
 
 CMD_RE = re.compile(r"^\s*CMD:\s*(.+?)\s*$", re.MULTILINE)
@@ -1136,7 +1137,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         def _worker():
             chunks: list[str] = []
             try:
-                for chunk in self.active_provider.chat(self.history, stream=True):
+                for chunk in self.active_provider.chat(self._request_messages(), stream=True):
                     if generation_id in self._cancelled_generations:
                         break
                     chunks.append(chunk)
@@ -1490,6 +1491,11 @@ class PromptOSWindow(Adw.ApplicationWindow):
             f"- active model: {active_model}",
             f"- provider config: {override}",
             f"- available: {available}",
+        ]
+        usage_fn = getattr(self.active_provider, "usage_summary", None)
+        if callable(usage_fn) and usage_fn():
+            lines.append(f"- tokens: {usage_fn()}")
+        lines += [
             "",
             "Configured models:",
         ]
@@ -1879,7 +1885,7 @@ os.replace(tmp_path, path)
         def _worker():
             try:
                 chunks = []
-                for chunk in self.active_provider.chat(self.history, stream=True):
+                for chunk in self.active_provider.chat(self._request_messages(), stream=True):
                     chunks.append(chunk)
                 response = "".join(chunks).strip()
                 if response:
@@ -2273,6 +2279,13 @@ os.replace(tmp_path, path)
             return GUI_AGENT_FALLBACK
 
     def _build_runtime_context(self) -> str:
+        """Session-stable context appended to the system prompt.
+
+        Deliberately contains nothing that changes turn to turn: the system
+        prompt is a prompt-cache breakpoint, and any byte change in it (a clock,
+        the cwd) invalidates the cached prefix for the whole conversation.
+        Volatile facts go in _live_context() instead.
+        """
         try:
             user = getpass.getuser()
         except Exception:
@@ -2282,25 +2295,40 @@ os.replace(tmp_path, path)
         except Exception:
             uid = -1
         priv = "root/full system access" if uid == 0 else "regular user — sudo for elevated commands"
-        provider = self.active_provider.name if self.active_provider else "none"
-        now = time.strftime("%Y-%m-%d %H:%M:%S")
-        tz = time.strftime("%Z%z")
         host = socket.gethostname()
         home = os.path.expanduser("~")
         return (
-            "\n\n## Live GUI Runtime Context\n"
+            "\n\n## GUI Runtime Context\n"
             f"- Hostname: {host}\n"
             f"- User: {user}\n"
             f"- UID: {uid}\n"
             f"- Privileges: {priv}\n"
             f"- Home: {home}\n"
-            f"- Current working directory: {self.current_cwd}\n"
-            f"- Active provider: {provider}\n"
-            f"- Local time: {now} {tz}\n"
             "- Command execution model: GUI executes suggested CMD lines and slash commands locally.\n"
             "- Working directory is persistent and can be changed with `cd`.\n"
+            "- The newest user message carries a [live context] block with the current working directory, active provider, and local time.\n"
             "- Do not claim lack of system context; suggest verification commands when needed.\n"
         )
+
+    def _live_context(self) -> str:
+        provider = self.active_provider.name if self.active_provider else "none"
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        tz = time.strftime("%Z%z")
+        return (
+            "[live context]\n"
+            f"- Current working directory: {self.current_cwd}\n"
+            f"- Active provider: {provider}\n"
+            f"- Local time: {now} {tz}"
+        )
+
+    def _request_messages(self) -> list[Message]:
+        """What actually goes to the provider: bounded history, with the live
+        context appended to the newest user message. self.history is untouched,
+        so saved sessions never accumulate stale context blocks."""
+        msgs = bound_history(self.history)
+        if msgs and msgs[-1].role == "user":
+            msgs[-1] = Message("user", f"{msgs[-1].content}\n\n{self._live_context()}")
+        return msgs
 
     def _refresh_system_message(self):
         base = self._load_gui_agent_prompt()

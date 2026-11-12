@@ -169,6 +169,16 @@ When `get_provider("ollama")` is called by name, it must still pass the model fr
 OllamaProvider(model=os.environ.get("PROMPTOS_OLLAMA_MODEL", "llama3.2:1b"))
 ```
 
+### Prompt caching / token economy
+The Claude provider marks the system prompt and the newest message as prompt-cache
+breakpoints, so the unchanged prefix of each request is billed at the cache-read rate.
+This only works if the system prompt is byte-identical from turn to turn:
+- Never put a clock, cwd, or other per-turn data in a `system` Message. Put it in the
+  newest user message instead (see `_live_context()` / `_request_messages()` in `promptos-gui`).
+- `providers.base.bound_history()` caps history at 60 non-system messages and trims the
+  oldest half in one go (not one per turn) so the cached prefix stays stable between trims.
+- `/verify` in promptsh and the GUI prints the last request's cached-token share.
+
 ### Docker platform
 Always build with `FROM --platform=linux/amd64` — `archlinux:latest` has no ARM64 image.
 All `pacman` calls inside Docker need `--disable-sandbox` (seccomp restriction).
