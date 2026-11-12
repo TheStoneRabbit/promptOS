@@ -125,7 +125,10 @@ def load_session(name: str) -> list:
     path = _session_path(name)
     with open(path) as f:
         data = _json.load(f)
-    return [Message(d["role"], d["content"]) for d in data]
+    # A saved system prompt goes stale (old AGENT.md, old system snapshot), so
+    # keep only the conversation turns and put a freshly built prompt in front.
+    turns = [Message(d["role"], d["content"]) for d in data if d["role"] != "system"]
+    return [Message("system", get_system_prompt())] + turns
 
 
 def list_sessions() -> list[tuple[str, int, int]]:
