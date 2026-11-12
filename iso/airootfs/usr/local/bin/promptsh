@@ -22,6 +22,11 @@ try:
 except ImportError:  # older provider library on disk (partial update) — degrade, don't crash
     def bound_history(messages, max_messages=60):
         return list(messages)
+try:
+    from providers.history import compact_history
+except ImportError:  # older provider library on disk (partial update) - degrade, don't crash
+    def compact_history(messages, *args, **kwargs):
+        return False
 import providers as _providers_module
 
 MODEL_ENV_BY_PROVIDER = {
@@ -2294,6 +2299,7 @@ def main():
             empty_retries = 0
             try:
                 while True:
+                    compact_history(turn_history)  # batch-trim + shrink old output so the cached prefix stays stable
                     # Stream response, collect chunks
                     response_chunks = []
                     _turn_t0 = time.time()
