@@ -208,12 +208,12 @@ current events, documentation, or anything outside its training cutoff.
 
 ## Shell Commands
 
-Command output is collapsed by default: while a command runs you see a one-line
-status (spinner, elapsed time, latest output line); when it finishes, short
-output is shown in full and long output is cut to its first and last four lines
-with a count of what was hidden. `/out` prints the whole thing, `/verbose`
-switches to traditional live streaming. The AI always receives the head and tail
-of the full output regardless of what is displayed.
+Command output has three display modes. `/quiet` (the default) shows one line per
+command. `/compact` shows short output in full and cuts long output to its first
+and last few lines, with a count of what was hidden. `/verbose` streams every line
+live. `/output` shows the current mode, and the choice is remembered between
+sessions. `/out` prints the whole output of a past command. The AI always receives
+the head and tail of the full output regardless of what is displayed.
 
 You don't have to wait for a reply to finish before typing the next request.
 While the AI is responding, just start typing: the line appears under the live
@@ -232,10 +232,26 @@ with Rich support; on the bare Linux console use `/queue add <text>` instead.)
 | `/providers` | List all providers and their status |
 | `/autorun` | Toggle auto-execution of AI-suggested commands |
 | `/out [n\|all]` | Full output of the last (or n-th last) command |
-| `/verbose` | Toggle live full output instead of collapsed |
+| `/quiet` | One line per command (default) |
+| `/compact` | Collapse long output to head and tail |
+| `/verbose` | Stream every line live |
+| `/output` | Show the current output mode |
 | `/queue` | List queued messages (`add`, `edit <n> [text]`, `rm <n>`, `clear`) |
 | `/clear` | Clear conversation history |
-| `/keys` | Manage API keys |
+| `/history` | Show conversation history |
+| `/save [name]` | Save the current conversation |
+| `/load <name>` | Restore a saved conversation |
+| `/sessions` | List saved conversations |
+| `/forget <name>` | Delete a saved conversation |
+| `/keys` | Show stored API keys |
+| `/setup` | Pick a provider and paste its API key |
+| `/llm-model` | Show or set the provider model selection |
+| `/verify-model` | Show the active provider and model |
+| `/model` | Manage the local Ollama model (`status`, `pull`, `ensure`) |
+| `/wifi` | Connect to a WiFi network |
+| `/gui` | Launch the graphical interface |
+| `/install` | Install promptOS to disk |
+| `/help` | Show the command reference |
 | `install promptOS` | Launch the disk installer |
 | `exit` | Exit promptsh |
 
@@ -256,13 +272,23 @@ promptOS/
 │       ├── usr/local/bin/promptos-install  # disk installer
 │       ├── usr/local/bin/promptos-patch    # safe unified-diff file edits
 │       ├── usr/local/bin/promptos-warmup   # Ollama model pre-loader
+│       ├── usr/local/bin/promptos-web      # web search and fetch (ddgr + w3m)
+│       ├── usr/local/bin/promptos-wifi     # interactive WiFi connect via nmcli
+│       ├── usr/local/bin/promptos-keys     # manage API keys
+│       ├── usr/local/bin/promptos-model    # manage the local Ollama model
+│       ├── usr/local/bin/promptos-gui      # graphical chat window
+│       ├── usr/local/bin/promptos-firstboot  # one-time WiFi + provider onboarding
+│       ├── usr/local/bin/promptos-wallpaper  # render and set the desktop background
 │       └── usr/local/lib/promptos/    # provider library
 │           ├── AGENT.md               # AI identity and ruleset (system prompt)
 │           └── providers/             # claude, openai, groq, ollama
 ├── scripts/
 │   ├── build.sh                       # build ISO via Docker
 │   ├── docker-build.sh                # runs inside container
-│   └── test.sh                        # boot ISO in QEMU
+│   ├── test.sh                        # boot ISO in QEMU
+│   ├── push.sh                        # push changes to a running install over SSH
+│   ├── update.sh                      # pull current main onto an install
+│   └── install-local.sh               # sync files onto an installed system
 └── dist/                              # built ISOs (gitignored)
 ```
 
@@ -277,6 +303,8 @@ promptOS/
 - [x] Auto-fallback between providers
 - [x] Disk installer (`install promptOS`)
 - [x] SSH access, network auto-configure on boot
+- [x] Graphical desktop (X + openbox) with the `promptos-gui` chat window and first-boot onboarding
+- [x] Saved conversations (`/save`, `/load`, `/sessions`), stored as JSON in `~/.promptsh/sessions`
 - [ ] WiFi management via AI (`connect to <SSID>`)
 - [ ] Persistent conversation memory across reboots (SQLite)
 - [ ] Wayland + sway + Firefox for GUI apps
