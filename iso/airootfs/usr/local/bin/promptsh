@@ -11,6 +11,7 @@ import subprocess
 import time
 import getpass
 import shlex
+import threading
 
 # Add promptOS library to path
 sys.path.insert(0, "/usr/local/lib/promptos")
@@ -39,7 +40,7 @@ PROMPTOS_EDIT_MODEL = os.environ.get("PROMPTOS_EDIT_MODEL", "gpt-5-mini")
 _BARE_TTY = os.environ.get("TERM") == "linux"
 
 try:
-    from rich.console import Console
+    from rich.console import Console, Group
     from rich.markdown import Markdown
     from rich.panel import Panel
     from rich.text import Text
@@ -1312,6 +1313,11 @@ def print_help():
             "[bold]Output[/bold]\n\n"
             "  [cyan]/out \\[n|all][/cyan]       — full output of the last (or n-th last) command\n"
             "  [cyan]/verbose[/cyan]           — toggle live full output instead of collapsed\n\n"
+            "[bold]Queue[/bold]\n\n"
+            "  Start typing while the AI is responding and press Enter — it's sent next.\n"
+            "  [cyan]/queue[/cyan]             — list queued messages\n"
+            "  [cyan]/queue edit \\<n> \\[text][/cyan] — edit message n (no text: pull it into the prompt)\n"
+            "  [cyan]/queue rm \\<n>[/cyan]      — remove message n   •  [cyan]/queue clear[/cyan]\n\n"
             "[bold]All commands[/bold]\n\n"
             "  [cyan]/providers[/cyan]         — list all providers and status\n"
             "  [cyan]/verify-model[/cyan]      — show the active provider/model in use\n"
@@ -1348,6 +1354,11 @@ def print_help():
   Output:
     /out [n|all]        — full output of the last (or n-th last) command
     /verbose            — toggle live full output instead of collapsed
+
+  Queue:
+    /queue              — list queued messages (/queue add <text> to add one)
+    /queue edit <n> [text] — edit message n (no text: pull it into the prompt)
+    /queue rm <n>       — remove message n;  /queue clear removes all
 
   All commands:
     /providers          — list all providers and their status
@@ -1423,16 +1434,230 @@ def _short_cwd() -> str:
     return cwd
 
 
-def get_input(session) -> str:
+def get_input(session, default: str = "") -> str:
     cwd = _short_cwd()
     if PROMPT_TOOLKIT:
         style = Style.from_dict({"prompt": "bold ansigreen", "cwd": "ansiblue"})
         return session.prompt(
             HTML(f"<prompt>promptOS</prompt> <cwd>{cwd}</cwd><ansiwhite>></ansiwhite> "),
             style=style,
+            default=default,
         ).strip()
     else:
-        return input(f"\001\033[1;32m\002promptOS\001\033[0m\002 \001\033[1;34m\002{cwd}\001\033[0m\002> ").strip()
+        if default:
+            readline.set_startup_hook(lambda: readline.insert_text(default))
+        try:
+            return input(f"\001\033[1;32m\002promptOS\001\033[0m\002 \001\033[1;34m\002{cwd}\001\033[0m\002> ").strip()
+        finally:
+            if default:
+                readline.set_startup_hook(None)
+
+
+# ── Message queue + type-ahead ────────────────────────────────────────────────
+# While the AI is streaming a reply you can already type the next message.
+# Keystrokes are captured raw (terminal echo off, so they don't smear into the
+# streamed markdown) and rendered on a "› " line under the live response; Enter
+# queues the line. Queued messages are sent one by one after the current turn
+# finishes, and can be listed/edited/removed with /queue at any time — including
+# while the AI is still working, by typing the /queue command on that same line.
+#
+# Only active in Rich mode on a real TTY (the bare Linux console has no live
+# region to draw the input line in). Type-ahead is paused while commands run
+# and while "Run this?" prompts are up, so those keep owning stdin.
+
+QUEUE_USAGE = (
+    "  /queue                 list queued messages\n"
+    "  /queue add <text>      queue a message\n"
+    "  /queue edit <n> <text> replace message n\n"
+    "  /queue edit <n>        pull message n into the prompt to edit it\n"
+    "  /queue rm <n>          remove message n\n"
+    "  /queue clear           remove all\n"
+    "  Tip: just start typing while the AI is responding — Enter queues it.\n"
+)
+
+
+def _format_queue(queue: list[str]) -> str:
+    if not queue:
+        return ("  Nothing queued. Start typing while the AI is responding and press Enter,\n"
+                "  or use /queue add <text>.\n")
+    width = _term_cols() - 8
+    lines = [f"  {i}. {_clip(q, width)}" for i, q in enumerate(queue, 1)]
+    return "\n".join(lines) + "\n  /queue edit <n> · /queue rm <n> · /queue clear\n"
+
+
+def handle_queue_command(queue: list[str], line: str):
+    """Mutate `queue` per a /queue command. Returns a message to print, or
+    ("edit", text) when the caller should put `text` into the prompt for editing."""
+    parts = line.strip().split(None, 2)
+    sub = parts[1].lower() if len(parts) > 1 else "list"
+    arg = parts[2].strip() if len(parts) > 2 else ""
+    if sub in ("list", "ls", "show"):
+        return _format_queue(queue)
+    if sub == "add":
+        if not arg:
+            return QUEUE_USAGE
+        queue.append(arg)
+        return f"  Queued #{len(queue)}: {_clip(arg, _term_cols() - 16)}\n"
+    if sub == "clear":
+        n = len(queue)
+        queue.clear()
+        return f"  Cleared {n} queued message{'s' if n != 1 else ''}.\n"
+    if sub in ("rm", "remove", "del", "delete", "edit"):
+        num_str, _, rest = arg.partition(" ")
+        try:
+            n = int(num_str)
+            if not 1 <= n <= len(queue):
+                raise ValueError
+        except ValueError:
+            return (f"  Give a number from 1 to {len(queue)}.\n" if queue else "  Nothing queued.\n") + QUEUE_USAGE
+        if sub == "edit":
+            rest = rest.strip()
+            if rest:
+                queue[n - 1] = rest
+                return f"  Updated #{n}: {_clip(rest, _term_cols() - 16)}\n"
+            return ("edit", queue.pop(n - 1))
+        removed = queue.pop(n - 1)
+        return f"  Removed #{n}: {_clip(removed, _term_cols() - 16)}\n"
+    return QUEUE_USAGE
+
+
+def _is_queue_command(line: str) -> bool:
+    return line in ("/q", "/queue") or line.startswith("/q ") or line.startswith("/queue ")
+
+
+class TypeAhead:
+    """Capture the next message while a response streams. See module notes."""
+
+    def __init__(self, queue: list[str]):
+        self.queue = queue
+        self.buffer = ""
+        self.on_change = lambda: None
+        self.enabled = False
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._saved = None
+        self._fd = None
+
+    def __enter__(self):
+        if not (RICH and sys.stdin.isatty()):
+            return self
+        try:
+            import termios
+            self._fd = sys.stdin.fileno()
+            self._saved = termios.tcgetattr(self._fd)
+            raw = termios.tcgetattr(self._fd)
+            raw[3] &= ~(termios.ECHO | termios.ICANON)   # keep ISIG: Ctrl-C still interrupts
+            raw[6][termios.VMIN] = 1
+            raw[6][termios.VTIME] = 0
+            termios.tcsetattr(self._fd, termios.TCSANOW, raw)
+        except Exception:
+            self._saved = None
+            return self
+        self.enabled = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=1)
+        if self._saved is not None:
+            try:
+                import termios
+                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._saved)
+            except Exception:
+                pass
+        return False
+
+    def _run(self):
+        import select as _sel
+        while not self._stop.is_set():
+            try:
+                ready, _, _ = _sel.select([self._fd], [], [], 0.1)
+            except Exception:
+                return
+            if not ready:
+                continue
+            try:
+                data = os.read(self._fd, 256).decode("utf-8", "replace")
+            except Exception:
+                return
+            changed = False
+            i = 0
+            while i < len(data):
+                c = data[i]
+                if c == "\x1b":
+                    # Skip escape sequences (arrow keys etc.): ESC [ ... <letter|~>
+                    j = i + 1
+                    while j < len(data) and not (data[j].isalpha() or data[j] == "~"):
+                        j += 1
+                    i = j + 1
+                    continue
+                if c in ("\r", "\n"):
+                    line = self.buffer.strip()
+                    self.buffer = ""
+                    if line:
+                        self._submit(line)
+                    changed = True
+                elif c in ("\x7f", "\x08"):
+                    self.buffer = self.buffer[:-1]
+                    changed = True
+                elif c == "\x15":            # Ctrl-U clears the line
+                    self.buffer = ""
+                    changed = True
+                elif c.isprintable():
+                    self.buffer += c
+                    changed = True
+                i += 1
+            if changed:
+                try:
+                    self.on_change()
+                except Exception:
+                    pass
+
+    def _submit(self, line: str):
+        if _is_queue_command(line):
+            result = handle_queue_command(self.queue, line)
+            if isinstance(result, tuple):      # bare "edit n" mid-stream: put it back
+                self.queue.append(result[1])
+        else:
+            self.queue.append(line)
+
+    def renderables(self) -> list:
+        """Rich renderables for the queue + input line, shown under the live reply."""
+        if not self.enabled:
+            return []
+        out = []
+        if self.queue:
+            width = max(20, _term_cols() - 12)
+            t = Text("queued  ", style="dim")
+            for i, q in enumerate(self.queue, 1):
+                t.append(f"{i}. ", style="dim cyan")
+                t.append(_clip(q, max(10, width // max(1, len(self.queue)) - 4)) + "   ", style="dim")
+            out.append(t)
+        if self.buffer or self.queue:
+            t = Text("› ", style="bold cyan")
+            t.append(self.buffer)
+            t.append("▌", style="dim")
+            out.append(t)
+        return out
+
+
+def _compose_live(markdown_text: str, typeahead: "TypeAhead"):
+    extras = typeahead.renderables()
+    if not extras:
+        return Markdown(markdown_text)
+    return Group(Markdown(markdown_text), Text(""), *extras)
+
+
+def _print_dequeued(text: str, remaining: int):
+    """Echo a queued message as it is sent, so the transcript reads naturally."""
+    more = f"  ({remaining} more queued)" if remaining else ""
+    if RICH:
+        console.print(f"[bold cyan]›[/bold cyan] {rich_escape(text)}[dim]{more}[/dim]")
+    else:
+        print(f"> {text}{more}")
 
 
 def render_response(text: str, provider_name: str):
@@ -1588,10 +1813,18 @@ def main():
             except Exception:
                 pass
 
+    message_queue: list[str] = []   # next messages, sent one per turn
+    pending_input = ""              # text to prefill the prompt with
+
     try:
         while True:
             try:
-                user_input = get_input(session)
+                if message_queue and not pending_input:
+                    user_input = message_queue.pop(0)
+                    _print_dequeued(user_input, len(message_queue))
+                else:
+                    user_input = get_input(session, default=pending_input)
+                    pending_input = ""
             except EOFError:
                 print()
                 break
@@ -1604,6 +1837,14 @@ def main():
 
             if user_input.lower() in ("exit", "quit"):
                 break
+
+            if _is_queue_command(user_input):
+                result = handle_queue_command(message_queue, user_input)
+                if isinstance(result, tuple):   # ("edit", text): hand it to the prompt
+                    pending_input = result[1]
+                else:
+                    print(result)
+                continue
 
             persist_turn = True
             if user_input.startswith("!!"):
@@ -1930,16 +2171,27 @@ def main():
                         # Live re-renders the accumulating markdown as chunks arrive,
                         # so the user sees rich formatting (bold, code blocks, lists)
                         # instead of raw markdown text.
-                        with Live(
+                        typeahead = TypeAhead(message_queue)
+                        with typeahead, Live(
                             Markdown(""),
                             console=console,
                             refresh_per_second=8,
                             vertical_overflow="visible",
                         ) as live:
+                            typeahead.on_change = lambda: live.update(
+                                _compose_live("".join(response_chunks), typeahead))
                             for chunk in active_provider.chat(bound_history(turn_history), stream=True):
                                 response_chunks.append(chunk)
-                                live.update(Markdown("".join(response_chunks)))
+                                live.update(_compose_live("".join(response_chunks), typeahead))
+                            # Final frame: just the reply, so the transcript stays clean.
+                            live.update(Markdown("".join(response_chunks)))
                         response = "".join(response_chunks)
+                        if typeahead.buffer.strip():
+                            # Typed but not submitted — don't lose it; prefill the next prompt.
+                            pending_input = typeahead.buffer
+                        if message_queue:
+                            n = len(message_queue)
+                            console.print(f"[dim]{n} message{'s' if n != 1 else ''} queued — sent when this turn finishes. /queue to manage.[/dim]")
                         console.print()
                     else:
                         print(f"\n\033[90m[{active_provider.name}]\033[0m ", end="", flush=True)

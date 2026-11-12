@@ -91,6 +91,10 @@ ssh root@localhost -p 2222  # clipboard/copy-paste via SSH
     collapsed to head/tail with hidden-line count. `/out [n|all]` shows full output,
     `/verbose` toggles live streaming (persisted in `~/.promptsh/state.json`).
     The AI gets a head+tail excerpt (`_ai_excerpt`, 1500 chars) of every command's output.
+  - Message queue + type-ahead: `TypeAhead` puts the tty in no-echo/non-canonical mode only
+    while a reply streams, reads keystrokes on a thread, and renders the input line inside the
+    Rich `Live` region (`_compose_live`). Enter queues; `/queue` cmds work mid-stream. Unsent
+    text is prefilled into the next prompt (`get_input(default=...)`). Not active on bare TTY.
   - Testable off-device: load `promptsh` with `importlib` SourceFileLoader in a venv with
     `rich` + `prompt_toolkit`, set `TERM=linux` to exercise the bare-TTY code path.
 - **`AGENT.md`** — AI identity/ruleset loaded as system prompt

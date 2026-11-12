@@ -215,6 +215,15 @@ with a count of what was hidden. `/out` prints the whole thing, `/verbose`
 switches to traditional live streaming. The AI always receives the head and tail
 of the full output regardless of what is displayed.
 
+You don't have to wait for a reply to finish before typing the next request.
+While the AI is responding, just start typing: the line appears under the live
+reply, Enter queues it, and queued messages are sent one per turn once the
+current one completes. `/queue` lists them; `/queue edit <n> <text>`,
+`/queue rm <n>` and `/queue clear` manage them, and these also work typed on
+that same input line mid-reply. `/queue edit <n>` with no text pulls the message
+into the prompt so you can edit it before sending. (Type-ahead needs a terminal
+with Rich support; on the bare Linux console use `/queue add <text>` instead.)
+
 | Command | Description |
 |---------|-------------|
 | `!cmd` | Run a bash command directly, bypassing AI |
@@ -224,6 +233,7 @@ of the full output regardless of what is displayed.
 | `/autorun` | Toggle auto-execution of AI-suggested commands |
 | `/out [n\|all]` | Full output of the last (or n-th last) command |
 | `/verbose` | Toggle live full output instead of collapsed |
+| `/queue` | List queued messages (`add`, `edit <n> [text]`, `rm <n>`, `clear`) |
 | `/clear` | Clear conversation history |
 | `/keys` | Manage API keys |
 | `install promptOS` | Launch the disk installer |
