@@ -34,6 +34,7 @@ class ClaudeProvider(Provider):
         # Usage of the most recent request: input_tokens, output_tokens,
         # cache_read_input_tokens, cache_creation_input_tokens. Shown by /verify-model.
         self.last_usage: dict = {}
+        self.last_blocks: list = []
 
     def available(self) -> bool:
         return bool(self.api_key)
@@ -81,6 +82,7 @@ class ClaudeProvider(Provider):
 
         self.last_usage = {}
         self.last_stop_reason = ""
+        self.last_blocks = []
         payload = json.dumps(self._build_body(messages, self.model, stream)).encode()
         req = urllib.request.Request(
             ANTHROPIC_API_URL,
@@ -107,6 +109,11 @@ class ClaudeProvider(Provider):
                         except json.JSONDecodeError:
                             continue
                         etype = data.get("type")
+                        if etype in ("content_block_start", "content_block_delta"):
+                            _blk = data.get("content_block") or data.get("delta") or {}
+                            _bt = _blk.get("type", "?")
+                            if _bt not in self.last_blocks:
+                                self.last_blocks.append(_bt)
                         if etype == "content_block_delta":
                             chunk = data.get("delta", {}).get("text", "")
                             if chunk:

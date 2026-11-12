@@ -270,7 +270,7 @@ def _log_turn(provider, n_msgs, chars, chunks, elapsed, err=""):
                 f"model={getattr(provider, 'model', '?')} msgs={n_msgs} chars_sent={chars} "
                 f"stop_reason={getattr(provider, 'last_stop_reason', '') or '-'} "
                 f"usage={_json.dumps(u, separators=(',', ':'))} chunks={chunks} "
-                f"secs={elapsed:.1f} err={err!r}\n")
+                f"secs={elapsed:.1f} blocks={','.join(getattr(provider, 'last_blocks', []) or []) or '-'} err={err!r}\n")
         with open(os.path.join(d, "promptsh-turns.log"), "a") as f:
             f.write(line)
     except Exception:
