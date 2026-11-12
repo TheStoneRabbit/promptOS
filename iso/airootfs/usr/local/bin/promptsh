@@ -1644,11 +1644,38 @@ class TypeAhead:
         return out
 
 
-def _compose_live(markdown_text: str, typeahead: "TypeAhead"):
+class _TurnStatus:
+    """Animated status line under the live reply, so it's obvious the turn is
+    still running (typing now has consequences) and what Enter will do."""
+
+    def __init__(self, typeahead: "TypeAhead"):
+        self.typeahead = typeahead
+        self.started = time.monotonic()
+        self.writing = False          # flips once the first token arrives
+
+    def __rich_console__(self, console, options):
+        frames = "|/-\\" if _BARE_TTY else "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        elapsed = time.monotonic() - self.started
+        frame = frames[int(elapsed * 10) % len(frames)]
+        label = "writing…" if self.writing else "thinking…"
+        t = Text(f"{frame} {label} {int(elapsed)}s", style="dim cyan")
+        if self.typeahead.buffer.strip():
+            t.append("   ↵ queues it; this reply's commands will be skipped", style="yellow")
+        elif self.typeahead.queue:
+            t.append("   message queued; this reply's commands will be skipped", style="yellow")
+        yield t
+
+
+def _compose_live(markdown_text: str, typeahead: "TypeAhead", status: "_TurnStatus | None" = None):
     extras = typeahead.renderables()
-    if not extras:
+    if not extras and status is None:
         return Markdown(markdown_text)
-    return Group(Markdown(markdown_text), Text(""), *extras)
+    parts = [Markdown(markdown_text), Text("")] if markdown_text else []
+    if status is not None:
+        parts.append(status)
+    if extras:
+        parts += [Text(""), *extras]
+    return Group(*parts)
 
 
 def _print_dequeued(text: str, remaining: int):
@@ -2172,17 +2199,19 @@ def main():
                         # so the user sees rich formatting (bold, code blocks, lists)
                         # instead of raw markdown text.
                         typeahead = TypeAhead(message_queue)
+                        status = _TurnStatus(typeahead)
                         with typeahead, Live(
-                            Markdown(""),
+                            _compose_live("", typeahead, status),
                             console=console,
                             refresh_per_second=8,
                             vertical_overflow="visible",
                         ) as live:
                             typeahead.on_change = lambda: live.update(
-                                _compose_live("".join(response_chunks), typeahead))
+                                _compose_live("".join(response_chunks), typeahead, status))
                             for chunk in active_provider.chat(bound_history(turn_history), stream=True):
                                 response_chunks.append(chunk)
-                                live.update(_compose_live("".join(response_chunks), typeahead))
+                                status.writing = True
+                                live.update(_compose_live("".join(response_chunks), typeahead, status))
                             # Final frame: just the reply, so the transcript stays clean.
                             live.update(Markdown("".join(response_chunks)))
                         response = "".join(response_chunks)
