@@ -94,7 +94,7 @@ echo "==> Target: $TARGET"
 
 # Rsync. -R preserves the relative source paths so files land at the right
 # spot on the target. --rsync-path uses sudo if we're not connecting as root.
-rsync $DRY -avzR \
+rsync $DRY -avzrR \
     --rsync-path="${SUDO}rsync" \
     --files-from="$RSYNC_LIST" \
     "$AIROOTFS/./" \

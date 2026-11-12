@@ -80,7 +80,7 @@ echo "==> Target: local machine (/)"
 [ -n "$DRY" ] && echo "==> DRY RUN (no files will be copied)"
 
 # Rsync locally. -R preserves relative source paths so files land correctly.
-${SUDO}rsync $DRY -avR \
+${SUDO}rsync $DRY -avrR \
     --files-from="$RSYNC_LIST" \
     "$AIROOTFS/./" \
     /

@@ -10,7 +10,11 @@ case "$-" in
                 /usr/local/bin/promptos-wifi --auto
             fi
             export PROMPTSH_ACTIVE=1
-            exec /usr/local/bin/promptsh
+            # Not `exec`: a promptsh crash drops to bash instead of logging out.
+            if /usr/local/bin/promptsh; then
+                exit
+            fi
+            echo "promptsh exited with an error — you're in plain bash. Run 'promptsh' to retry." >&2
         fi
         ;;
 esac

@@ -16,7 +16,11 @@ import shlex
 sys.path.insert(0, "/usr/local/lib/promptos")
 
 from providers import get_provider, list_providers, Message
-from providers.base import bound_history
+try:
+    from providers.base import bound_history
+except ImportError:  # older provider library on disk (partial update) — degrade, don't crash
+    def bound_history(messages, max_messages=60):
+        return list(messages)
 import providers as _providers_module
 
 MODEL_ENV_BY_PROVIDER = {
