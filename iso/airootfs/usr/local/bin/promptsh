@@ -199,7 +199,7 @@ VERBOSE_OUTPUT     = False   # /verbose on → stream everything live (old behav
 COMPACT_MAX_LINES  = 12      # output up to this many lines is shown in full
 COMPACT_HEAD       = 4       # lines kept from the start of long output
 COMPACT_TAIL       = 4       # lines kept from the end of long output
-AI_FEEDBACK_CHARS  = 6000    # how much of each command's output the AI sees
+AI_FEEDBACK_CHARS  = 2500    # how much of each command's output the AI sees
 OUTPUT_LOG_MAX     = 20      # how many command outputs /out can recall
 OUTPUT_LOG: list[dict] = []
 
