@@ -243,6 +243,23 @@ def _fmt_elapsed(seconds: float) -> str:
     return f"{h}h {m:02d}m"
 
 
+def _log_turn(provider, n_msgs, chars, chunks, elapsed, err=""):
+    """Best-effort one-line record of each request, for diagnosing blank replies. Never raises."""
+    try:
+        d = os.path.expanduser("~/.local/state/promptos")
+        os.makedirs(d, exist_ok=True)
+        u = getattr(provider, "last_usage", {}) or {}
+        line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')} provider={provider.name} "
+                f"model={getattr(provider, 'model', '?')} msgs={n_msgs} chars_sent={chars} "
+                f"stop_reason={getattr(provider, 'last_stop_reason', '') or '-'} "
+                f"usage={_json.dumps(u, separators=(',', ':'))} chunks={chunks} "
+                f"secs={elapsed:.1f} err={err!r}\n")
+        with open(os.path.join(d, "promptsh-turns.log"), "a") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
 def _remember_output(cmd: str, exit_code, output: str):
     OUTPUT_LOG.append({"cmd": cmd, "exit_code": exit_code, "output": output, "at": time.time()})
     del OUTPUT_LOG[:-OUTPUT_LOG_MAX]
@@ -2225,10 +2242,12 @@ def main():
             # again to interpret/continue. Capped to keep the AI from spinning forever.
             MAX_AGENT_TURNS = 15
             agent_turn = 0
+            empty_retries = 0
             try:
                 while True:
                     # Stream response, collect chunks
                     response_chunks = []
+                    _turn_t0 = time.time()
                     if RICH:
                         color = PROVIDER_COLORS.get(active_provider.name, "bold white")
                         console.print(f"\n[{color}][{active_provider.name}][/{color}]")
@@ -2267,6 +2286,20 @@ def main():
                         response = "".join(response_chunks)
                         print("\n")
 
+                    _log_turn(active_provider, len(turn_history), sum(len(m.content) for m in bound_history(turn_history)), len(response_chunks), time.time() - _turn_t0)
+                    if not response.strip():
+                        stop = getattr(active_provider, "last_stop_reason", "") or "unknown"
+                        retry = empty_retries < 1
+                        empty_retries += 1
+                        warn = f"Empty reply from {active_provider.name} (stop_reason={stop}); " + ("retrying once." if retry else "giving up. Send your message again, or /clear if this repeats.")
+                        if RICH:
+                            console.print(f"[yellow]{warn}[/yellow]\n")
+                        else:
+                            print(f"\033[33m{warn}\033[0m\n")
+                        if retry:
+                            continue
+                        break
+                    empty_retries = 0
                     turn_history.append(Message("assistant", response))
 
                     cmds = extract_commands(response)
@@ -2326,6 +2359,7 @@ def main():
                     print("\n\033[33m[cancelled]\033[0m\n")
                 turn_history.pop()
             except Exception as e:
+                _log_turn(active_provider, len(turn_history), 0, len(locals().get("response_chunks", [])), time.time() - locals().get("_turn_t0", time.time()), err=str(e))
                 if RICH:
                     console.print(f"\n[red]Provider error ({active_provider.name}): {e}[/red]")
                 else:

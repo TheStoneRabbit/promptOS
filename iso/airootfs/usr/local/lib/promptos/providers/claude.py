@@ -80,6 +80,7 @@ class ClaudeProvider(Provider):
             raise RuntimeError("ANTHROPIC_API_KEY not set")
 
         self.last_usage = {}
+        self.last_stop_reason = ""
         payload = json.dumps(self._build_body(messages, self.model, stream)).encode()
         req = urllib.request.Request(
             ANTHROPIC_API_URL,
@@ -94,6 +95,7 @@ class ClaudeProvider(Provider):
 
         with urllib.request.urlopen(req, timeout=120) as resp:
             if stream:
+                saw_stop = False
                 for line in resp:
                     line = line.decode().strip()
                     if line.startswith("data:"):
@@ -116,8 +118,16 @@ class ClaudeProvider(Provider):
                             # Claude 5-family safety classifiers can end a turn with
                             # stop_reason "refusal" and empty content — say so instead
                             # of showing a blank reply.
+                            self.last_stop_reason = data.get("delta", {}).get("stop_reason") or self.last_stop_reason
                             if data.get("delta", {}).get("stop_reason") == "refusal":
                                 yield "[Claude declined this request.]"
+                        elif etype == "message_stop":
+                            saw_stop = True
+                        elif etype == "error":
+                            err = data.get("error", {})
+                            raise RuntimeError(f"Anthropic stream error: {err.get('type', 'error')}: {err.get('message', '')}")
+                if not saw_stop:
+                    raise RuntimeError("Anthropic stream ended without message_stop (connection dropped or truncated)")
             else:
                 data = json.loads(resp.read())
                 self._record_usage(data.get("usage"))
