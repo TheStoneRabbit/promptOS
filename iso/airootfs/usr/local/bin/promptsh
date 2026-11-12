@@ -2209,6 +2209,19 @@ def main():
                         # just talking. Hand control back to the user.
                         break
 
+                    if message_queue:
+                        # A message was queued while this reply streamed, so the user has moved on.
+                        # Skip this reply's commands and end the agent loop; the queued message is
+                        # sent next. Note it in history so the AI knows nothing ran.
+                        n = len(cmds)
+                        turn_history[-1] = Message("assistant", response + "\n\n[promptsh: the CMD: lines above were NOT run; the user sent a new message first]")
+                        skip_msg = f"Skipped {n} command{'s' if n != 1 else ''} from this reply; sending your queued message."
+                        if RICH:
+                            console.print(f"[yellow]{skip_msg}[/yellow]\n")
+                        else:
+                            print(f"\033[33m{skip_msg}\033[0m\n")
+                        break
+
                     results = run_commands(cmds, autorun=_autorun_this)
                     # Feed command results back into history so AI knows what happened
                     feedback_lines = ["[command results]"]
