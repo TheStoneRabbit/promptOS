@@ -139,6 +139,26 @@ def read_lines(path: Path, create: bool) -> list[str]:
         raise PatchError(f"{path}: file does not exist") from e
 
 
+def locate_hunk(original: list[str], old_block: list[str], old_start: int, cursor: int, path: Path) -> int:
+    """Find where a hunk applies; the @@ line number is only a hint."""
+    hint = 0 if old_start == 0 else old_start - 1
+    n = len(old_block)
+    if n:
+        found = [i for i in range(cursor, len(original) - n + 1) if original[i:i + n] == old_block]
+        if found:
+            best = min(abs(i - hint) for i in found)
+            nearest = [i for i in found if abs(i - hint) == best]
+            if len(nearest) > 1:
+                where = ", ".join(str(i + 1) for i in nearest)
+                raise PatchError(f"{path}: ambiguous hunk (equally near matches at lines {where}); add more context")
+            return nearest[0]
+    if hint < cursor:
+        raise PatchError(f"{path}: overlapping hunk at old line {old_start}")
+    if hint > len(original):
+        raise PatchError(f"{path}: hunk starts past end of file at old line {old_start}")
+    return hint
+
+
 def apply_file_patch(file_patch: FilePatch) -> tuple[Path, list[str] | None]:
     path = file_patch.path
     original = read_lines(path, file_patch.is_create)
@@ -146,11 +166,8 @@ def apply_file_patch(file_patch: FilePatch) -> tuple[Path, list[str] | None]:
     cursor = 0
 
     for hunk in file_patch.hunks:
-        start = 0 if hunk.old_start == 0 else hunk.old_start - 1
-        if start < cursor:
-            raise PatchError(f"{path}: overlapping hunk at old line {hunk.old_start}")
-        if start > len(original):
-            raise PatchError(f"{path}: hunk starts past end of file at old line {hunk.old_start}")
+        old_block = [c for op, c in hunk.lines if op in (" ", "-")]
+        start = locate_hunk(original, old_block, hunk.old_start, cursor, path)
         output.extend(original[cursor:start])
         cursor = start
 
@@ -188,16 +205,25 @@ def write_atomic(path: Path, lines: list[str] | None, backup: bool):
         path.unlink()
         return
 
+    path = path.resolve()  # edit the symlink target, not the link itself
     path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode if path.exists() else None
+    st = path.stat() if path.exists() else None
     if backup and path.exists():
         shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", newline="") as f:
             f.writelines(lines)
-        if mode is not None:
-            os.chmod(tmp_name, mode)
+        if st is not None:
+            try:
+                os.chown(tmp_name, st.st_uid, st.st_gid)
+            except OSError:
+                pass
+            os.chmod(tmp_name, st.st_mode)
+        else:
+            umask = os.umask(0)
+            os.umask(umask)
+            os.chmod(tmp_name, 0o666 & ~umask)
         os.replace(tmp_name, path)
     except Exception:
         try:
