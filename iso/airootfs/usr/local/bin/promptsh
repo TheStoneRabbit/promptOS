@@ -429,6 +429,48 @@ def _preauth_sudo() -> bool:
         return False
 
 
+_SUDO_SHIM_DIR = None
+
+
+def _child_env() -> dict:
+    """Environment for commands run by promptsh. A sudo shim goes first in PATH so
+    sudo can never prompt for a password inside a running command (the prompt would
+    be hidden by the output pipe and the queue would swallow the user's keystrokes).
+    The shim uses sudo -n and fails with a hint instead; the password is asked for
+    separately by _preauth_sudo / a standalone sudo -v step."""
+    global _SUDO_SHIM_DIR
+    env = os.environ.copy()
+    try:
+        if os.geteuid() == 0:
+            return env
+        import shutil, tempfile, atexit
+        if _SUDO_SHIM_DIR is None:
+            real = shutil.which("sudo")
+            if not real:
+                return env
+            d = tempfile.mkdtemp(prefix="promptsh-shim-")
+            shim = "\n".join([
+                "#!/bin/sh",
+                "# promptsh: sudo must never prompt inside a running command.",
+                f"if ! {real} -n true 2>/dev/null; then",
+                '    echo "promptsh: sudo needs your password. Run sudo -v as its own step first." >&2',
+                "    exit 1",
+                "fi",
+                f'exec {real} -n "$@"',
+                "",
+            ])
+            path = os.path.join(d, "sudo")
+            with open(path, "w") as f:
+                f.write(shim)
+            os.chmod(path, 0o755)
+            atexit.register(shutil.rmtree, d, True)
+            _SUDO_SHIM_DIR = d
+        env["PATH"] = _SUDO_SHIM_DIR + os.pathsep + env.get("PATH", "")
+    except Exception:
+        pass
+    return env
+
+
 def _looks_like_prompt(text: str) -> bool:
     """Heuristic: an unterminated output line that is waiting for the user."""
     import re
@@ -976,6 +1018,7 @@ def run_commands(cmds: list[str], autorun: bool = False, typeahead: "TypeAhead |
         proc = subprocess.Popen(
             cmd, shell=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            env=_child_env(),
         )
         assert proc.stdout is not None
         # Type-ahead: while the command runs, capture keystrokes (echo off) so the

@@ -66,6 +66,20 @@ If the user asks for a specific version/tag, pass `--ref <tag>`.
 - For file edits, prefer `promptos-patch` with a unified diff heredoc. Use it for both small and multiline edits so changes are atomic and reviewable.
 - Avoid `sed -i` for source/config edits unless the user explicitly asks for sed or the target is throwaway generated text.
 
+### sudo and passwords
+Never let a password prompt happen inside a running command or script. The
+user's keystrokes are captured by the message queue while commands run, so a
+sudo prompt in the middle of a command gets swallowed.
+- Inside commands, `sudo` never prompts. It fails with "sudo needs your password"
+  if there is no cached credential.
+- If a command or script needs sudo, first emit `sudo -v` as its OWN step, alone
+  on its own `CMD:` line, and wait for its result before running the real
+  command. Tell the user in one line that you need their password.
+- Do not chain `sudo -v` with other commands (`sudo -v && ...`), and do not
+  bury it inside a script.
+- If a command fails with "sudo needs your password", run `sudo -v` as its own
+  step and then retry once.
+
 ### Package management (pacman)
 Always pass `--noconfirm` to non-destructive pacman operations so the user
 isn't double-prompted (promptsh already prompts before running the command).
