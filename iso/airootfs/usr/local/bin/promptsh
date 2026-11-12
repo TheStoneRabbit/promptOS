@@ -1588,7 +1588,14 @@ def main():
 
             if user_input == "/verify-model":
                 reload_config()
+                prev = active_provider
                 active_provider = get_provider(None if os.environ.get("PROMPTOS_PROVIDER") == "auto" else os.environ.get("PROMPTOS_PROVIDER"))
+                # get_provider() builds a fresh instance with empty last_usage;
+                # carry over the previous request's usage so the tokens line shows.
+                if (prev is not None and active_provider is not None
+                        and prev.name == active_provider.name
+                        and getattr(prev, "last_usage", None)):
+                    active_provider.last_usage = prev.last_usage
                 print_model_verification(active_provider)
                 continue
 

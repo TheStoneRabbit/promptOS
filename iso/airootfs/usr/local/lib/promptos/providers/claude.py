@@ -32,7 +32,7 @@ class ClaudeProvider(Provider):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
         # Usage of the most recent request: input_tokens, output_tokens,
-        # cache_read_input_tokens, cache_creation_input_tokens. Shown by /verify.
+        # cache_read_input_tokens, cache_creation_input_tokens. Shown by /verify-model.
         self.last_usage: dict = {}
 
     def available(self) -> bool:
