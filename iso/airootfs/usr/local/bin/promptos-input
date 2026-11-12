@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# promptos-input — simple wrapper around ydotool for synthetic mouse/keyboard input.
+# Works on Wayland via /dev/uinput. Requires ydotoold (user service: ydotool.service).
+#
+# Usage:
+#   promptos-input move   <dx> <dy>        Move the pointer relative to its current position
+#   promptos-input moveto <x> <y>          Move the pointer to absolute screen coordinates (via promptos-pointer goto)
+#   promptos-input click  [left|right|middle]   Click a mouse button (default left)
+#   promptos-input type   "<text>"         Type text
+#   promptos-input key    <code:1 code:0 ...>   Raw Linux keycodes (e.g. Enter = 28:1 28:0)
+set -u
+
+sock="${YDOTOOL_SOCKET:-/run/user/$(id -u)/.ydotool_socket}"
+if [ ! -S "$sock" ]; then
+    echo "promptos-input: ydotoold is not running (no socket at $sock)." >&2
+    echo "  Start it with: systemctl --user start ydotool.service" >&2
+    exit 1
+fi
+export YDOTOOL_SOCKET="$sock"
+
+usage() {
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' >&2
+}
+
+# Banner: warn the user before any synthetic input, clear it after idle.
+banner_last="${XDG_RUNTIME_DIR:-/tmp}/promptos-input.last"
+ensure_banner() {
+    local now last nid idle="${PROMPTOS_BANNER_IDLE:-6}"
+    now=$(date +%s)
+    last=$(cat "$banner_last" 2>/dev/null || echo 0)
+    if [ $(( now - last )) -gt "$idle" ]; then
+        nid=$(notify-send -p -a promptOS -u critical -t 0 "HANDS OFF THE MOUSE" "promptOS is controlling the mouse and keyboard. Do not touch them." 2>/dev/null) || nid=""
+        [ -n "$nid" ] || { echo "promptos-input: could not post the hands-off banner; refusing to send input." >&2; exit 1; }
+        printf '%s' "$now" > "$banner_last"
+        setsid bash -c 'while :; do l=$(cat "$1" 2>/dev/null || echo 0); [ $(( $(date +%s) - l )) -gt "$3" ] && break; sleep 1; done; notify-send -a promptOS -u normal -t 5000 -r "$2" "promptOS" "You can use the mouse again" 2>/dev/null' _ "$banner_last" "$nid" "$idle" >/dev/null 2>&1 </dev/null &
+        sleep "${PROMPTOS_BANNER_DELAY:-1.5}"
+    fi
+    date +%s > "$banner_last"
+}
+
+# Run an input command while keeping the banner timestamp fresh.
+run_input() {
+    local hb rc
+    ( while :; do date +%s > "$banner_last"; sleep 1; done ) &
+    hb=$!
+    "$@"; rc=$?
+    kill "$hb" 2>/dev/null; wait "$hb" 2>/dev/null
+    date +%s > "$banner_last"
+    exit "$rc"
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+    move|moveto|click|type|key) ensure_banner ;;
+esac
+
+case "$cmd" in
+    move)
+        [ $# -eq 2 ] || { usage; exit 1; }
+        run_input ydotool mousemove -x "$1" -y "$2" ;;
+    moveto)
+        [ $# -eq 2 ] || { usage; exit 1; }
+        promptos-pointer goto "$1" "$2" ;;
+    click)
+        case "${1:-left}" in
+            left)   code=0xC0 ;;
+            right)  code=0xC1 ;;
+            middle) code=0xC2 ;;
+            *) usage; exit 1 ;;
+        esac
+        run_input ydotool click "$code" ;;
+    type)
+        [ $# -ge 1 ] || { usage; exit 1; }
+        run_input ydotool type -- "$1" ;;
+    key)
+        [ $# -ge 1 ] || { usage; exit 1; }
+        run_input ydotool key "$@" ;;
+    *)
+        usage; exit 1 ;;
+esac

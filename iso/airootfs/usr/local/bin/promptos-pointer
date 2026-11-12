@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# promptos-pointer — find and position the pointer on GNOME Wayland.
+#   promptos-pointer locate        print "X Y" of the pointer (via GNOME's locate-pointer ring)
+#   promptos-pointer goto X Y      move the pointer to X,Y (corner-slam + calibrated relative move)
+# Calibration: one unit of "promptos-input move" = 1.25px with accel-profile flat (measured).
+set -u
+W=${PROMPTOS_SCREEN_W:-1920}
+H=${PROMPTOS_SCREEN_H:-1080}
+SCALE=${PROMPTOS_PTR_SCALE:-1.25}
+KEY=org.gnome.desktop.interface
+cmd=${1:-}
+shift || true
+
+case "$cmd" in
+  goto)
+    [ $# -eq 2 ] || { echo "usage: promptos-pointer goto X Y" >&2; exit 1; }
+    x=$1; y=$2
+    PK=org.gnome.desktop.peripherals.mouse
+    prof=$(gsettings get $PK accel-profile)
+    trap 'gsettings set $PK accel-profile "$prof"' EXIT
+    gsettings set $PK accel-profile flat
+    promptos-input move -$((W * 2)) $((H * 2)) || exit 1
+    dx=$(awk -v x="$x" -v s="$SCALE" 'BEGIN{printf "%d", int(x/s+0.5)}')
+    dy=$(awk -v y="$y" -v h="$H" -v s="$SCALE" 'BEGIN{printf "%d", -int((h-1-y)/s+0.5)}')
+    promptos-input move "$dx" "$dy"
+    ;;
+  locate)
+    orig=$(gsettings get $KEY locate-pointer)
+    d=$(mktemp -d)
+    trap 'gsettings set $KEY locate-pointer "$orig"; rm -rf "$d"' EXIT
+    sleep 0.3
+    promptos-screenshot "$d/a.png" >/dev/null || exit 2
+    gsettings set $KEY locate-pointer true
+    promptos-input key 29:1 29:0
+    promptos-screenshot "$d/b.png" >/dev/null || exit 2
+    res=$(magick "$d/a.png" "$d/b.png" -compose difference -composite -colorspace gray -threshold 5% \
+        -define connected-components:verbose=true -define connected-components:area-threshold=150 \
+        -connected-components 8 null: 2>/dev/null | awk '
+          { split($2, g, /[x+]/); w=g[1]; h=g[2];
+            if ($5 ~ /255/ && $4 >= 800 && w >= 30 && w <= 60 && h >= 30 && h <= 60) {
+              split($3, c, ","); printf "%d %d\n", c[1]+0.5, c[2]+0.5 } }')
+    [ -n "$res" ] || { echo "promptos-pointer: ring not found" >&2; exit 1; }
+    [ "$(printf '%s\n' "$res" | wc -l)" -eq 1 ] || echo "promptos-pointer: several ring-like blobs, using the first" >&2
+    printf '%s\n' "$res" | head -n 1
+    ;;
+  mark)
+    dest=${1:-}
+    [ -n "$dest" ] || { echo "usage: promptos-pointer mark DEST.png" >&2; exit 1; }
+    pos=$("$0" locate) || exit 1
+    set -- $pos
+    sleep 1.2
+    promptos-screenshot "$dest" >/dev/null || exit 2
+    magick "$dest" -fill none -stroke red -strokewidth 4 -draw "circle $1,$2 $(($1+24)),$2" "$dest" || exit 2
+    echo "$dest (pointer at $1,$2)"
+    ;;
+  *)
+    sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2
+    exit 1
+    ;;
+esac

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# promptos-status "<text>" — one-line on-screen status (replaces the previous banner) + action log
+msg="$*"
+[ -n "$msg" ] || { echo "usage: promptos-status <text>" >&2; exit 1; }
+idf=/tmp/promptos-status.id
+rid=$(cat "$idf" 2>/dev/null)
+if [ -n "$rid" ]; then
+  nid=$(notify-send -p -r "$rid" -a promptOS -t 5000 "promptOS" "$msg" 2>/dev/null)
+else
+  nid=$(notify-send -p -a promptOS -t 5000 "promptOS" "$msg" 2>/dev/null)
+fi
+[ -n "$nid" ] && printf '%s' "$nid" > "$idf"
+log=/var/log/promptos/actions.log
+if ! { mkdir -p /var/log/promptos 2>/dev/null; touch "$log" 2>/dev/null; }; then
+  log="$HOME/.local/state/promptos/actions.log"
+  mkdir -p "$(dirname "$log")"
+fi
+printf '%s %s\n' "$(date '+%F %T')" "$msg" >> "$log" 2>/dev/null
+exit 0

@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+# promptos-screenshot — capture the screen through xdg-desktop-portal (works on GNOME Wayland).
+#
+# Usage:
+#   promptos-screenshot [DEST.png]    Take a screenshot, print the saved file path.
+#                                     If DEST is given, the image is also copied there.
+import os
+import shutil
+import sys
+import urllib.parse
+import uuid
+
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib
+
+
+def main():
+    dest = sys.argv[1] if len(sys.argv) > 1 else None
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    token = "promptos_" + uuid.uuid4().hex[:8]
+    sender = bus.get_unique_name()[1:].replace(".", "_")
+    handle = "/org/freedesktop/portal/desktop/request/%s/%s" % (sender, token)
+
+    loop = GLib.MainLoop()
+    result = {}
+
+    def on_response(conn, snd, path, iface, sig, params):
+        code, res = params.unpack()
+        result["code"] = code
+        result["res"] = res
+        loop.quit()
+
+    bus.signal_subscribe(
+        "org.freedesktop.portal.Desktop", "org.freedesktop.portal.Request", "Response",
+        handle, None, Gio.DBusSignalFlags.NONE, on_response)
+
+    opts = {
+        "handle_token": GLib.Variant("s", token),
+        "interactive": GLib.Variant("b", False),
+    }
+    bus.call_sync(
+        "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Screenshot", "Screenshot",
+        GLib.Variant("(sa{sv})", ("", opts)),
+        None, Gio.DBusCallFlags.NONE, -1, None)
+
+    def on_timeout():
+        loop.quit()
+        return False
+
+    GLib.timeout_add_seconds(30, on_timeout)
+    loop.run()
+
+    if "code" not in result:
+        print("promptos-screenshot: timed out waiting for the portal", file=sys.stderr)
+        return 1
+    if result["code"] != 0 or "uri" not in result["res"]:
+        print("promptos-screenshot: portal denied or cancelled the request (code %s)" % result["code"], file=sys.stderr)
+        return 2
+
+    path = urllib.parse.unquote(urllib.parse.urlparse(result["res"]["uri"]).path)
+    if dest:
+        shutil.copy(path, dest)
+        if os.path.abspath(path) != os.path.abspath(dest):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        path = dest
+    print(path)
+    return 0
+
+
+sys.exit(main())
