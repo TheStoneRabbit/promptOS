@@ -80,7 +80,10 @@ echo "==> Target: local machine (/)"
 [ -n "$DRY" ] && echo "==> DRY RUN (no files will be copied)"
 
 # Rsync locally. -R preserves relative source paths so files land correctly.
-${SUDO}rsync $DRY -avrR \
+# --chown forces root ownership (the snapshot is extracted as the invoking
+# user); --no-implied-dirs keeps -a from copying the snapshot's owner/mode
+# onto existing parents like /, /etc, /usr and /root.
+${SUDO}rsync $DRY -avrR --no-implied-dirs --chown=root:root \
     --files-from="$RSYNC_LIST" \
     "$AIROOTFS/./" \
     /
