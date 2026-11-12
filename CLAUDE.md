@@ -87,6 +87,12 @@ ssh root@localhost -p 2222  # clipboard/copy-paste via SSH
   - `/providers` to list available providers
   - Figlet banner renders `promptOS` correctly at boot
   - readline-safe ANSI prompt (`\001`/`\002` wrappers) — no width miscalculation
+  - Compact command output (default): live one-line status while running; long output
+    collapsed to head/tail with hidden-line count. `/out [n|all]` shows full output,
+    `/verbose` toggles live streaming (persisted in `~/.promptsh/state.json`).
+    The AI gets a head+tail excerpt (`_ai_excerpt`, 1500 chars) of every command's output.
+  - Testable off-device: load `promptsh` with `importlib` SourceFileLoader in a venv with
+    `rich` + `prompt_toolkit`, set `TERM=linux` to exercise the bare-TTY code path.
 - **`AGENT.md`** — AI identity/ruleset loaded as system prompt
   - Located at `/usr/local/lib/promptos/AGENT.md`
   - Defines AI as promptOS system agent with full root access

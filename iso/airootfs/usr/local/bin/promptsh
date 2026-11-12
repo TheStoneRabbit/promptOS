@@ -186,6 +186,141 @@ def _save_autorun_default(enabled: bool):
     _save_state(state)
 
 
+# ── Command output display ────────────────────────────────────────────────────
+# Compact mode (default) keeps the screen readable: long command output is
+# collapsed to head + tail, with the full text kept for `/out` and for the AI.
+VERBOSE_OUTPUT     = False   # /verbose on → stream everything live (old behaviour)
+COMPACT_MAX_LINES  = 12      # output up to this many lines is shown in full
+COMPACT_HEAD       = 4       # lines kept from the start of long output
+COMPACT_TAIL       = 4       # lines kept from the end of long output
+AI_FEEDBACK_CHARS  = 1500    # how much of each command's output the AI sees
+OUTPUT_LOG_MAX     = 20      # how many command outputs /out can recall
+OUTPUT_LOG: list[dict] = []
+
+
+def _load_verbose_default() -> bool:
+    env = os.environ.get("PROMPTOS_VERBOSE_OUTPUT", "").strip().lower()
+    if env in ("1", "true", "yes", "on"):
+        return True
+    if env in ("0", "false", "no", "off"):
+        return False
+    value = _load_state().get("verbose_output")
+    return value if isinstance(value, bool) else VERBOSE_OUTPUT
+
+
+def _save_verbose_default(enabled: bool):
+    state = _load_state()
+    state["verbose_output"] = bool(enabled)
+    _save_state(state)
+
+
+def _term_cols() -> int:
+    import shutil as _sh
+    return max(40, _sh.get_terminal_size((80, 24)).columns)
+
+
+def _clip(s: str, width: int) -> str:
+    """Single-line truncation with an ellipsis."""
+    s = s.replace("\t", "    ")
+    return s if len(s) <= width else s[:max(1, width - 1)] + "…"
+
+
+def _fmt_elapsed(seconds: float) -> str:
+    if seconds < 1:
+        return "<1s"
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    m, s = divmod(int(seconds), 60)
+    if m < 60:
+        return f"{m}m {s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m:02d}m"
+
+
+def _remember_output(cmd: str, exit_code, output: str):
+    OUTPUT_LOG.append({"cmd": cmd, "exit_code": exit_code, "output": output, "at": time.time()})
+    del OUTPUT_LOG[:-OUTPUT_LOG_MAX]
+
+
+def _ai_excerpt(output: str, limit: int = AI_FEEDBACK_CHARS) -> str:
+    """What the AI gets to read: the whole thing if short, else head + tail so
+    both the setup and the final result/error survive the cut."""
+    output = output.strip()
+    if len(output) <= limit:
+        return output
+    half = limit // 2
+    omitted = len(output) - 2 * half
+    return f"{output[:half]}\n…[{omitted} chars omitted; the user can see them with /out]…\n{output[-half:]}"
+
+
+def _print_output_line(line: str):
+    cols = _term_cols()
+    print(f"\033[2m┃\033[0m {_clip(line, cols - 2)}")
+
+
+def _print_compact_output(lines: list[str]) -> int:
+    """Print output collapsed to head+tail when long. Returns hidden line count."""
+    if not lines:
+        return 0
+    if len(lines) <= COMPACT_MAX_LINES:
+        for ln in lines:
+            _print_output_line(ln)
+        return 0
+    hidden = len(lines) - COMPACT_HEAD - COMPACT_TAIL
+    for ln in lines[:COMPACT_HEAD]:
+        _print_output_line(ln)
+    print(f"\033[2m┃ … {hidden} more line{'s' if hidden != 1 else ''} hidden …\033[0m")
+    for ln in lines[-COMPACT_TAIL:]:
+        _print_output_line(ln)
+    return hidden
+
+
+def show_output_log(arg: str = ""):
+    """/out [n|all]: print the full output of a recent command."""
+    if not OUTPUT_LOG:
+        print("  No command output yet.\n")
+        return
+    arg = arg.strip()
+    if arg in ("all", "list"):
+        for i, e in enumerate(reversed(OUTPUT_LOG), 1):
+            n = len(e["output"].rstrip("\n").split("\n")) if e["output"].strip() else 0
+            code = "skipped" if e["exit_code"] is None else f"exit {e['exit_code']}"
+            print(f"  {i:>2}  {_clip(e['cmd'], _term_cols() - 30):<{_term_cols() - 28}} {code}, {n} line{'s' if n != 1 else ''}")
+        print("\n  /out <n> shows one of them in full.\n")
+        return
+    try:
+        n = int(arg) if arg else 1
+    except ValueError:
+        print("  Usage: /out            full output of the last command\n"
+              "         /out <n>        the n-th most recent command\n"
+              "         /out all        list recent commands\n")
+        return
+    if not 1 <= n <= len(OUTPUT_LOG):
+        print(f"  Only {len(OUTPUT_LOG)} command output{'s' if len(OUTPUT_LOG) != 1 else ''} remembered.\n")
+        return
+    e = OUTPUT_LOG[-n]
+    print(f"\n\033[1;33m▶\033[0m \033[33m{e['cmd']}\033[0m")
+    text = e["output"].rstrip("\n")
+    if text.strip():
+        for ln in text.split("\n"):
+            print(f"\033[2m┃\033[0m {ln}")
+    else:
+        print("\033[2m┃ (no output)\033[0m")
+    code = e["exit_code"]
+    if code is None:
+        print("\033[2m└─ skipped\033[0m\n")
+    elif code == 0:
+        print("\033[2m└─\033[0m \033[32mexit 0\033[0m\n")
+    else:
+        print(f"\033[2m└─\033[0m \033[31mexit {code}\033[0m\n")
+
+
+def _set_verbose(enabled: bool):
+    global VERBOSE_OUTPUT
+    VERBOSE_OUTPUT = bool(enabled)
+
+
+
 # ── Tab completion ────────────────────────────────────────────────────────────
 # When the line starts with `!`, complete bash command names (first token) or
 # filesystem paths (subsequent tokens). Otherwise no completion.
@@ -631,9 +766,21 @@ def _missing_path_hint(cmd: str, output: str) -> str:
 def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
     """Run commands, return results for injection into AI history.
 
-    Output is visually distinct from AI responses: each line is prefixed with
-    a dim │ bar so it reads like an indented quote/code block, with the cmd
-    header in yellow on top and a trailing └─ exit N in green/red below."""
+    Two display modes:
+      compact (default) — while a command runs, a single status line shows a
+        spinner, elapsed time and the most recent output line. When it finishes,
+        short output is printed in full; long output is collapsed to its first
+        and last few lines with a count of what was hidden. `/out` shows the
+        whole thing. This keeps the screen readable for people who don't want
+        to parse 300 lines of pacman.
+      verbose (/verbose on) — stream every line live, as a traditional shell
+        would. Power-user mode.
+
+    In both modes the full output is captured for the AI and for `/out`."""
+    import re as _re2
+    import select as _select
+    import shutil as _shutil
+
     results = []
     for original_cmd in cmds:
         cmd = _normalize_pacman_noninteractive(original_cmd)
@@ -664,110 +811,178 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
                 print("\033[2mAuto-run (safe command).\033[0m")
         else:
             try:
-                ans = (console.input("[dim]Run? \\[Y/n][/dim] ") if RICH else input("Run? [Y/n] ")).strip().lower()
-                confirmed = ans in ("", "y", "yes")
+                if RICH:
+                    ans = console.input("[dim]Run this? \\[Enter = yes, n = skip][/dim] ")
+                else:
+                    ans = input("Run this? [Enter = yes, n = skip] ")
+                confirmed = ans.strip().lower() in ("", "y", "yes")
             except EOFError:
                 confirmed = False
 
-        if confirmed:
-            # Intercept `cd` so it actually changes the shell's cwd instead of
-            # running in a child process that exits immediately.
-            if is_pure_cd(cmd):
-                ok, msg = builtin_cd(cmd)
-                hint = _missing_path_hint(cmd, msg) if not ok else ""
-                if hint:
-                    print(hint)
-                    msg = f"{msg}\n{hint}"
-                if not ok:
-                    print(msg)
-                results.append({
-                    "cmd": cmd,
-                    "exit_code": 0 if ok else 1,
-                    "output": msg,
-                })
-                continue
+        if not confirmed:
+            if RICH:
+                console.print("[dim]└─ skipped[/dim]")
+            else:
+                print("\033[2m└─ skipped\033[0m")
+            results.append({"cmd": cmd, "exit_code": None, "output": ""})
+            continue
 
-            # Stream output live so the user sees progress as the command runs,
-            # while also capturing it to feed back into the AI conversation.
-            proc = subprocess.Popen(
-                cmd, shell=True, text=True,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                bufsize=1,  # line-buffered
-            )
-            # Each output line gets a dim ┃ prefix on every visual row so
-            # command output is clearly distinct from the AI's markdown above.
-            # We wrap at terminal width ourselves (instead of letting the
-            # terminal soft-wrap) so long lines don't lose the prefix on
-            # continuation rows. Also re-emit the prefix after every \r so
-            # progress-bar style updates don't overwrite it.
-            import shutil as _shutil
-            LINE_PREFIX = "\033[2m┃\033[0m "
-            PREFIX_VIS  = 2  # visible width of "┃ "
-
-            def _emit(line: str):
-                cols = max(40, _shutil.get_terminal_size((80, 24)).columns)
-                inner = cols - PREFIX_VIS
-                has_nl = line.endswith("\n")
-                body = line.rstrip("\n")
-                parts = body.split("\r")
-                out = []
-                for pi, chunk in enumerate(parts):
-                    if not chunk:
-                        out.append(LINE_PREFIX)
-                    else:
-                        j, first = 0, True
-                        while j < len(chunk):
-                            if not first:
-                                out.append("\n")
-                            out.append(LINE_PREFIX + chunk[j:j + inner])
-                            j += inner
-                            first = False
-                    if pi < len(parts) - 1:
-                        out.append("\r")
-                if has_nl:
-                    out.append("\n")
-                sys.stdout.write("".join(out))
-                sys.stdout.flush()
-
-            output_chunks: list[str] = []
-            interrupted = False
-            try:
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    _emit(line)
-                    output_chunks.append(line)
-            except KeyboardInterrupt:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                print()
-                interrupted = True
-            proc.wait()
-            output = "".join(output_chunks)
-            hint = _missing_path_hint(cmd, output)
+        # Intercept `cd` so it actually changes the shell's cwd instead of
+        # running in a child process that exits immediately.
+        if is_pure_cd(cmd):
+            ok, msg = builtin_cd(cmd)
+            hint = _missing_path_hint(cmd, msg) if not ok else ""
             if hint:
                 print(hint)
-                output = f"{output}\n{hint}"
-            # Trailer — └─ followed by green/red exit code; makes the boundary
-            # between command output and the next AI response obvious.
-            if not interrupted:
-                if proc.returncode == 0:
-                    print("\033[2m└─\033[0m \033[32mexit 0\033[0m")
+                msg = f"{msg}\n{hint}"
+            if not ok:
+                print(msg)
+            _remember_output(cmd, 0 if ok else 1, msg)
+            results.append({"cmd": cmd, "exit_code": 0 if ok else 1, "output": msg})
+            continue
+
+        proc = subprocess.Popen(
+            cmd, shell=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        assert proc.stdout is not None
+        fd = proc.stdout.fileno()
+
+        LINE_PREFIX = "\033[2m┃\033[0m "
+        PREFIX_VIS = 2  # visible width of "┃ "
+
+        def _emit_verbose(line: str):
+            """Verbose mode: print one output line with the ┃ prefix, wrapping
+            at terminal width ourselves so continuation rows keep the prefix,
+            and re-emitting the prefix after \\r so progress bars stay inside."""
+            cols = _term_cols()
+            inner = cols - PREFIX_VIS
+            has_nl = line.endswith("\n")
+            body = line.rstrip("\n")
+            parts = body.split("\r")
+            out = []
+            for pi, chunk in enumerate(parts):
+                if not chunk:
+                    out.append(LINE_PREFIX)
                 else:
-                    print(f"\033[2m└─\033[0m \033[31mexit {proc.returncode}\033[0m")
-            results.append({
-                "cmd": cmd,
-                "exit_code": proc.returncode,
-                "output": output[:2000],
-            })
-            # Re-raise so the agent loop bails out of the whole multi-step task
-            # instead of marching on to the next command and re-querying the AI.
-            if interrupted:
-                raise KeyboardInterrupt
+                    j, first = 0, True
+                    while j < len(chunk):
+                        if not first:
+                            out.append("\n")
+                        out.append(LINE_PREFIX + chunk[j:j + inner])
+                        j += inner
+                        first = False
+                if pi < len(parts) - 1:
+                    out.append("\r")
+            if has_nl:
+                out.append("\n")
+            sys.stdout.write("".join(out))
+            sys.stdout.flush()
+
+        spinner = "|/-\\" if _BARE_TTY else "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        started = time.monotonic()
+        raw = bytearray()
+        pending = b""        # bytes after the last \n or \r (an unfinished line)
+        vpending = ""        # verbose mode: text not yet terminated by \n
+        last_line = ""       # most recent completed segment, for the status line
+        tick = 0
+        status_shown = False
+        interrupted = False
+
+        def _status():
+            nonlocal tick, status_shown
+            elapsed = _fmt_elapsed(time.monotonic() - started)
+            cols = _term_cols()
+            head = f"{spinner[tick % len(spinner)]} {elapsed}"
+            tail = _clip(last_line.strip(), max(10, cols - len(head) - 4))
+            line = f"\033[2m{head}\033[0m  {tail}" if tail else f"\033[2m{head}\033[0m"
+            sys.stdout.write("\r\033[2K" + line)
+            sys.stdout.flush()
+            tick += 1
+            status_shown = True
+
+        try:
+            while True:
+                ready, _, _ = _select.select([fd], [], [], 0.15)
+                if ready:
+                    data = os.read(fd, 65536)
+                    if not data:
+                        break
+                    raw += data
+                    pending += data
+                    # Split on \n or \r; the final piece is still in progress.
+                    segs = _re2.split(rb"\r\n|\n|\r", pending)
+                    pending = segs.pop()
+                    if segs:
+                        last_line = segs[-1].decode("utf-8", "replace")
+                    if VERBOSE_OUTPUT:
+                        # Emit whole lines only; _emit_verbose handles \r inside a line.
+                        vpending += data.decode("utf-8", "replace")
+                        while "\n" in vpending:
+                            ln, vpending = vpending.split("\n", 1)
+                            _emit_verbose(ln + "\n")
+                if not VERBOSE_OUTPUT:
+                    _status()
+        except KeyboardInterrupt:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            interrupted = True
+        proc.wait()
+        if VERBOSE_OUTPUT and vpending:
+            _emit_verbose(vpending + "\n")
+        if status_shown:
+            sys.stdout.write("\r\033[2K")
+            sys.stdout.flush()
+        if interrupted:
+            print()
+
+        # Normalise captured output: a \r-driven progress bar collapses to its
+        # final state so the AI and /out see one line per update, not 400.
+        output = raw.decode("utf-8", "replace")
+        output = _re2.sub(r"[^\r\n]*\r(?!\n)", "", output).replace("\r\n", "\n")
+        hint = _missing_path_hint(cmd, output)
+        if hint:
+            output = f"{output}\n{hint}"
+
+        out_lines = output.rstrip("\n").split("\n") if output.strip() else []
+        if not VERBOSE_OUTPUT:
+            hidden = _print_compact_output(out_lines)
         else:
-            results.append({"cmd": cmd, "exit_code": None, "output": ""})
+            hidden = 0
+            if hint:
+                for ln in hint.strip("\n").split("\n"):
+                    _print_output_line(ln)
+
+        # Trailer — └─ with green/red exit code, line count and duration so the
+        # boundary before the next AI response is obvious at a glance.
+        elapsed = _fmt_elapsed(time.monotonic() - started)
+        meta = []
+        if out_lines:
+            meta.append(f"{len(out_lines)} line{'s' if len(out_lines) != 1 else ''}")
+        meta.append(elapsed)
+        if hidden:
+            meta.append("/out shows everything")
+        meta_str = "\033[2m · " + " · ".join(meta) + "\033[0m"
+        if interrupted:
+            print(f"\033[2m└─\033[0m \033[33mcancelled\033[0m{meta_str}")
+        elif proc.returncode == 0:
+            print(f"\033[2m└─\033[0m \033[32mexit 0\033[0m{meta_str}")
+        else:
+            print(f"\033[2m└─\033[0m \033[31mexit {proc.returncode}\033[0m{meta_str}")
+
+        _remember_output(cmd, proc.returncode, output)
+        results.append({
+            "cmd": cmd,
+            "exit_code": proc.returncode,
+            "output": output[:20000],
+        })
+        # Re-raise so the agent loop bails out of the whole multi-step task
+        # instead of marching on to the next command and re-querying the AI.
+        if interrupted:
+            raise KeyboardInterrupt
     return results
 
 
@@ -973,34 +1188,50 @@ def print_banner(provider):
         )
     except Exception:
         logo = "promptOS"
+    if not logo.endswith("\n"):
+        logo += "\n"
 
     ip = _local_ip()
 
     if RICH:
         color = PROVIDER_COLORS.get(provider_name, "bold white") if provider_name else "bold white"
         provider_str = f"[{color}]{provider_name}[/{color}]" if provider_name else "[yellow]no provider[/yellow]"
-        model_str = f"  •  model: [dim]{model}[/dim]" if model else ""
-        net_str = f"[bold green]{ip}[/bold green]" if ip else "[yellow]offline[/yellow]"
+        model_str = f" [dim]· {model}[/dim]" if model else ""
+        net_str = f"[dim]ip[/dim] [bold green]{ip}[/bold green]" if ip else "[yellow]offline — try /wifi[/yellow]"
         console.print(f"[bold cyan]{logo}[/bold cyan]", end="")
         console.print(Panel(
-            f"[dim]AI-Native Linux[/dim]  •  provider: {provider_str}{model_str}  •  ip: {net_str}\n"
-            f"[dim]/help for commands  •  !cmd for bash  •  exit to quit[/dim]",
+            "[bold]Tell me what you want to do, in plain English.[/bold]\n"
+            "[dim]For example:[/dim]  [cyan]connect to my wifi[/cyan]   [cyan]free up disk space[/cyan]   [cyan]install firefox[/cyan]\n"
+            "[dim]I'll suggest the commands and ask before running anything that changes your system.[/dim]\n\n"
+            f"{provider_str}{model_str}  •  {net_str}\n"
+            f"[dim]/help  all commands  •  !cmd  run bash yourself  •  exit  quit[/dim]",
             border_style="dim",
             box=box.ROUNDED,
         ))
     else:
         print(f"\033[1;36m{logo}\033[0m")
         status = f"\033[1;32m{provider_name}\033[0m" if provider_name else "\033[33mno provider\033[0m"
-        model_str = f"  |  model: {model}" if model else ""
-        net = f"\033[1;32m{ip}\033[0m" if ip else "\033[33moffline\033[0m"
-        print(f"  AI-Native Linux  |  provider: {status}{model_str}  |  ip: {net}")
-        print("  /help for commands  |  !cmd to run bash directly  |  exit to quit\n")
+        model_str = f" - {model}" if model else ""
+        net = f"ip \033[1;32m{ip}\033[0m" if ip else "\033[33moffline - try /wifi\033[0m"
+        print("  Tell me what you want to do, in plain English.")
+        print("  For example:  connect to my wifi  |  free up disk space  |  install firefox")
+        print("  I'll suggest the commands and ask before running anything that changes your system.\n")
+        print(f"  {status}{model_str}  |  {net}")
+        print("  /help  all commands  |  !cmd  run bash yourself  |  exit  quit\n")
 
 
 def print_help():
     if RICH:
         console.print(Panel(
-            "[bold]promptsh commands[/bold]\n\n"
+            "[bold]Getting started[/bold]\n\n"
+            "  Just type what you want in plain English — no commands needed.\n"
+            "  When I suggest a command I'll show it and ask [dim]Run this?[/dim] first.\n"
+            "  Press [bold]Enter[/bold] to run it, or [bold]n[/bold] to skip. Ctrl-C stops a running command.\n"
+            "  Long output is collapsed to the first and last few lines; [cyan]/out[/cyan] shows all of it.\n\n"
+            "[bold]Output[/bold]\n\n"
+            "  [cyan]/out \\[n|all][/cyan]       — full output of the last (or n-th last) command\n"
+            "  [cyan]/verbose[/cyan]           — toggle live full output instead of collapsed\n\n"
+            "[bold]All commands[/bold]\n\n"
             "  [cyan]/providers[/cyan]         — list all providers and status\n"
             "  [cyan]/verify-model[/cyan]      — show the active provider/model in use\n"
             "  [cyan]/llm-model[/cyan]         — show or set provider model selection\n"
@@ -1027,7 +1258,17 @@ def print_help():
         ))
     else:
         print("""
-  promptsh commands:
+  Getting started:
+    Just type what you want in plain English — no commands needed.
+    When I suggest a command I'll show it and ask "Run this?" first.
+    Press Enter to run it, or n to skip. Ctrl-C stops a running command.
+    Long output is collapsed to the first and last few lines; /out shows all of it.
+
+  Output:
+    /out [n|all]        — full output of the last (or n-th last) command
+    /verbose            — toggle live full output instead of collapsed
+
+  All commands:
     /providers          — list all providers and their status
     /verify-model       — show the active provider/model in use
     /llm-model          — show or set provider model selection
@@ -1256,6 +1497,7 @@ def main():
     history: list[Message] = [Message("system", get_system_prompt())]
     active_provider = provider
     autorun = _load_autorun_default()
+    _set_verbose(_load_verbose_default())
     ollama_warmed = False  # show a one-time "loading model" notice on first ollama prompt
 
     def save_history():
@@ -1491,6 +1733,24 @@ def main():
                         print("  Autorun OFF — commands will prompt before running (saved)\n")
                 continue
 
+            if user_input == "/out" or user_input.startswith("/out "):
+                show_output_log(user_input[4:])
+                continue
+
+            if user_input in ("/verbose", "/verbose on", "/verbose off"):
+                turn_on = user_input == "/verbose on" or (user_input == "/verbose" and not VERBOSE_OUTPUT)
+                _set_verbose(turn_on)
+                _save_verbose_default(turn_on)
+                if turn_on:
+                    msg = "Verbose output ON — every line of command output is shown live (saved)"
+                else:
+                    msg = "Compact output ON — long output is collapsed; /out shows it all (saved)"
+                if RICH:
+                    console.print(f"  [green]{msg}[/green]\n")
+                else:
+                    print(f"  {msg}\n")
+                continue
+
             if user_input == "/keys":
                 try:
                     subprocess.run(["promptos-keys", "show"])
@@ -1620,7 +1880,7 @@ def main():
                         else:
                             feedback_lines.append(f"  $ {r['cmd']} → FAILED (exit {r['exit_code']})")
                         if r["output"].strip():
-                            feedback_lines.append(f"    output: {r['output'].strip()[:500]}")
+                            feedback_lines.append("    output: " + _ai_excerpt(r["output"]).replace("\n", "\n            "))
                     turn_history.append(Message("user", "\n".join(feedback_lines)))
 
                     # If the user skipped every command, the AI has nothing new to

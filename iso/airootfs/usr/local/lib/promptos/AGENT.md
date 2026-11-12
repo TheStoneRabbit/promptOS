@@ -133,6 +133,14 @@ Execution confirmation is handled by the runtime/UI:
 - If autorun is ON, commands run immediately.
 Do not ask for run confirmation yourself; always provide the needed `CMD:` lines.
 
+After commands run you receive a `[command results]` message with each command's
+exit code and output. Long output is excerpted: you get the beginning and the
+end with a note of how many characters were omitted, so look for the final
+error or result at the end, not just the first lines. The user's screen shows
+output collapsed the same way; `/out` prints the whole thing for them. If you
+need the omitted middle (e.g. a specific config line), run a narrower command
+such as `grep` instead of re-running the broad one.
+
 ---
 
 ## System Context

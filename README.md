@@ -208,6 +208,13 @@ current events, documentation, or anything outside its training cutoff.
 
 ## Shell Commands
 
+Command output is collapsed by default: while a command runs you see a one-line
+status (spinner, elapsed time, latest output line); when it finishes, short
+output is shown in full and long output is cut to its first and last four lines
+with a count of what was hidden. `/out` prints the whole thing, `/verbose`
+switches to traditional live streaming. The AI always receives the head and tail
+of the full output regardless of what is displayed.
+
 | Command | Description |
 |---------|-------------|
 | `!cmd` | Run a bash command directly, bypassing AI |
@@ -215,6 +222,8 @@ current events, documentation, or anything outside its training cutoff.
 | `/switch <name>` | Switch AI provider |
 | `/providers` | List all providers and their status |
 | `/autorun` | Toggle auto-execution of AI-suggested commands |
+| `/out [n\|all]` | Full output of the last (or n-th last) command |
+| `/verbose` | Toggle live full output instead of collapsed |
 | `/clear` | Clear conversation history |
 | `/keys` | Manage API keys |
 | `install promptOS` | Launch the disk installer |
