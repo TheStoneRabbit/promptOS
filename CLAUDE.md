@@ -90,7 +90,8 @@ ssh root@localhost -p 2222  # clipboard/copy-paste via SSH
   - Compact command output (default): live one-line status while running; long output
     collapsed to head/tail with hidden-line count. `/out [n|all]` shows full output,
     `/verbose` toggles live streaming (persisted in `~/.promptsh/state.json`).
-    The AI gets a head+tail excerpt (`_ai_excerpt`, 1500 chars) of every command's output.
+    The AI gets a head+tail excerpt (`_ai_excerpt`, 6000 chars) of every command's output;
+    over the limit, repeated consecutive lines are collapsed first (`_collapse_repeats`).
   - Message queue + type-ahead: `TypeAhead` puts the tty in no-echo/non-canonical mode only
     while a reply streams, reads keystrokes on a thread, and renders the input line inside the
     Rich `Live` region (`_compose_live`). Enter queues; `/queue` cmds work mid-stream. Unsent

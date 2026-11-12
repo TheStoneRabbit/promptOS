@@ -199,7 +199,7 @@ VERBOSE_OUTPUT     = False   # /verbose on → stream everything live (old behav
 COMPACT_MAX_LINES  = 12      # output up to this many lines is shown in full
 COMPACT_HEAD       = 4       # lines kept from the start of long output
 COMPACT_TAIL       = 4       # lines kept from the end of long output
-AI_FEEDBACK_CHARS  = 1500    # how much of each command's output the AI sees
+AI_FEEDBACK_CHARS  = 6000    # how much of each command's output the AI sees
 OUTPUT_LOG_MAX     = 20      # how many command outputs /out can recall
 OUTPUT_LOG: list[dict] = []
 
@@ -248,10 +248,27 @@ def _remember_output(cmd: str, exit_code, output: str):
     del OUTPUT_LOG[:-OUTPUT_LOG_MAX]
 
 
+def _collapse_repeats(text: str) -> str:
+    """Collapse runs of identical consecutive lines into one line plus a
+    repeat marker, and runs of blank lines into a single blank line.
+    Scraped pages and retry loops repeat a lot; this keeps them in budget."""
+    from itertools import groupby
+    out: list[str] = []
+    for line, group in groupby(text.split("\n"), key=lambda l: l if l.strip() else ""):
+        n = sum(1 for _ in group)
+        out.append(line)
+        if n > 1 and line:
+            out.append(f"[previous line repeated {n - 1}×]")
+    return "\n".join(out)
+
+
 def _ai_excerpt(output: str, limit: int = AI_FEEDBACK_CHARS) -> str:
     """What the AI gets to read: the whole thing if short, else head + tail so
     both the setup and the final result/error survive the cut."""
     output = output.strip()
+    if len(output) <= limit:
+        return output
+    output = _collapse_repeats(output)   # only applied when over the limit
     if len(output) <= limit:
         return output
     half = limit // 2
@@ -813,7 +830,7 @@ def _missing_path_hint(cmd: str, output: str) -> str:
     return "\n".join(lines)
 
 
-def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
+def run_commands(cmds: list[str], autorun: bool = False, typeahead: "TypeAhead | None" = None) -> list[dict]:
     """Run commands, return results for injection into AI history.
 
     Two display modes:
@@ -907,6 +924,13 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
         assert proc.stdout is not None
+        # Type-ahead: while the command runs, capture keystrokes (echo off) so the
+        # status-line redraw can't erase them. Released if the command prompts.
+        capturing = False
+        if typeahead is not None and not VERBOSE_OUTPUT:
+            typeahead.enabled = False
+            typeahead.__enter__()
+            capturing = typeahead.enabled
         fd = proc.stdout.fileno()
 
         LINE_PREFIX = "\033[2m┃\033[0m "
@@ -960,8 +984,13 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
             # Prefer the unfinished line (what the program is saying right now)
             # over the last completed one.
             live = pending.decode("utf-8", "replace").strip() or last_line.strip()
-            tail = _clip(live, max(10, cols - len(head) - 4))
+            typed = ""
+            if capturing:
+                typed = "› " + typeahead.buffer[-max(10, cols - len(head) - 24):] + ("_" if _BARE_TTY else "▏")
+            tail = _clip(live, max(10, cols - len(head) - len(typed) - 6))
             line = f"\033[2m{head}\033[0m  {tail}" if tail else f"\033[2m{head}\033[0m"
+            if typed:
+                line += f"  \033[1;36m{typed}\033[0m"
             sys.stdout.write("\r\033[2K" + line)
             sys.stdout.flush()
             tick += 1
@@ -993,6 +1022,10 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
                         if _looks_like_prompt(ptxt):
                             # Something is waiting for input: put the prompt on
                             # its own row, bold, and park the cursor after it.
+                            # Hand the terminal back so the answer goes to the command.
+                            if capturing:
+                                typeahead.__exit__(None, None, None)
+                                capturing = False
                             if status_shown:
                                 sys.stdout.write("\r\033[2K")
                                 status_shown = False
@@ -1009,6 +1042,9 @@ def run_commands(cmds: list[str], autorun: bool = False) -> list[dict]:
                 proc.kill()
             interrupted = True
         proc.wait()
+        if capturing:
+            typeahead.__exit__(None, None, None)
+            capturing = False
         if VERBOSE_OUTPUT and not v_at_start:
             sys.stdout.write("\n")
             sys.stdout.flush()
@@ -1539,6 +1575,7 @@ class TypeAhead:
         self._fd = None
 
     def __enter__(self):
+        self._stop.clear()   # reusable across commands in one run_commands call
         if not (RICH and sys.stdin.isatty()):
             return self
         try:
@@ -2251,7 +2288,11 @@ def main():
                             print(f"\033[33m{skip_msg}\033[0m\n")
                         break
 
-                    results = run_commands(cmds, autorun=_autorun_this)
+                    cmd_typeahead = TypeAhead(message_queue)
+                    results = run_commands(cmds, autorun=_autorun_this, typeahead=cmd_typeahead)
+                    if cmd_typeahead.buffer.strip():
+                        # Typed during the command but not submitted; prefill the next prompt.
+                        pending_input = cmd_typeahead.buffer
                     # Feed command results back into history so AI knows what happened
                     feedback_lines = ["[command results]"]
                     for r in results:
