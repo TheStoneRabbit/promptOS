@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+# promptos-find-text — locate on-screen text with OCR and print where to click.
+#
+# Usage:
+#   promptos-find-text [options] "text"
+#     --region X1,Y1,X2,Y2   only consider words whose centre is inside this box
+#     --image FILE           OCR an existing screenshot instead of taking a new one
+#     --all                  print every match (default: first match, top to bottom)
+#     --dump                 print every recognised word and its box, then exit
+#     --min-conf N           ignore words below this OCR confidence (default 30)
+#
+# Output: "X Y" per match: the centre of the matched text, in the same pixel
+# space as promptos-pointer goto / promptos-click (screenshot pixels).
+# Multi-word phrases match words that sit next to each other on one row.
+# Exit: 0 found, 1 not found, 2 error.
+#
+# Why OCR: on GNOME Wayland, AT-SPI reports every widget position as 0,0.
+import argparse
+import csv
+import io
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+
+def norm(s):
+    return re.sub(r"[^\w&]", "", s.lower())
+
+
+def ocr(image, min_conf):
+    p = subprocess.run(
+        ["tesseract", image, "stdout", "--psm", "11", "tsv"],
+        capture_output=True, text=True,
+    )
+    if p.returncode != 0:
+        print("promptos-find-text: tesseract failed: " + p.stderr.strip(), file=sys.stderr)
+        sys.exit(2)
+    words = []
+    rd = csv.reader(io.StringIO(p.stdout), delimiter="\t", quoting=csv.QUOTE_NONE)
+    next(rd, None)
+    for row in rd:
+        if len(row) < 12:
+            continue
+        text = row[11].strip()
+        if not text:
+            continue
+        try:
+            conf = float(row[10])
+            l, t, w, h = (int(v) for v in row[6:10])
+        except ValueError:
+            continue
+        if conf < min_conf:
+            continue
+        words.append({"text": text, "n": norm(text), "l": l, "t": t, "w": w, "h": h})
+    return words
+
+
+def in_region(word, region):
+    if not region:
+        return True
+    cx = word["l"] + word["w"] / 2
+    cy = word["t"] + word["h"] / 2
+    return region[0] <= cx <= region[2] and region[1] <= cy <= region[3]
+
+
+def find(words, phrase):
+    toks = [t for t in (norm(x) for x in phrase.split()) if t]
+    if not toks:
+        return []
+    hits = []
+    for first in words:
+        if first["n"] != toks[0]:
+            continue
+        chain = [first]
+        for tk in toks[1:]:
+            prev = chain[-1]
+            pcy = prev["t"] + prev["h"] / 2
+            best, best_gap = None, None
+            for c in words:
+                if c is prev or c["n"] != tk:
+                    continue
+                gap = c["l"] - (prev["l"] + prev["w"])
+                span = max(prev["h"], c["h"])
+                if gap < -2 or gap > span * 2:
+                    continue
+                if abs((c["t"] + c["h"] / 2) - pcy) > span * 0.6:
+                    continue
+                if best is None or gap < best_gap:
+                    best, best_gap = c, gap
+            if best is None:
+                chain = None
+                break
+            chain.append(best)
+        if chain:
+            hits.append(chain)
+    out = []
+    for chain in hits:
+        l = min(c["l"] for c in chain)
+        t = min(c["t"] for c in chain)
+        r = max(c["l"] + c["w"] for c in chain)
+        b = max(c["t"] + c["h"] for c in chain)
+        out.append(((l + r) // 2, (t + b) // 2, t, l))
+    out.sort(key=lambda m: (m[2], m[3]))
+    return [(x, y) for x, y, _, _ in out]
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("text", nargs="?")
+    ap.add_argument("--region")
+    ap.add_argument("--image")
+    ap.add_argument("--all", action="store_true")
+    ap.add_argument("--dump", action="store_true")
+    ap.add_argument("--min-conf", type=float, default=30)
+    a = ap.parse_args()
+    if not a.text and not a.dump:
+        ap.print_usage(sys.stderr)
+        return 2
+
+    region = None
+    if a.region:
+        try:
+            region = [int(v) for v in a.region.split(",")]
+            assert len(region) == 4
+        except Exception:
+            print("promptos-find-text: --region needs X1,Y1,X2,Y2", file=sys.stderr)
+            return 2
+
+    tmp = None
+    image = a.image
+    try:
+        if not image:
+            fd, tmp = tempfile.mkstemp(prefix="promptos-find-", suffix=".png")
+            os.close(fd)
+            p = subprocess.run(["promptos-screenshot", tmp], capture_output=True, text=True)
+            if p.returncode != 0:
+                print("promptos-find-text: screenshot failed: " + p.stderr.strip(), file=sys.stderr)
+                return 2
+            image = tmp
+        words = [w for w in ocr(image, a.min_conf) if in_region(w, region)]
+    finally:
+        if tmp and os.path.exists(tmp):
+            os.remove(tmp)
+
+    if a.dump:
+        for w in words:
+            print("%s left=%d top=%d w=%d h=%d" % (w["text"], w["l"], w["t"], w["w"], w["h"]))
+        return 0
+
+    hits = find(words, a.text)
+    if not hits:
+        return 1
+    for x, y in (hits if a.all else hits[:1]):
+        print("%d %d" % (x, y))
+    return 0
+
+
+sys.exit(main())

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# promptos-click-text — find on-screen text with OCR, then click it.
+#
+# Usage:
+#   promptos-click-text [options] "text"
+#     --region X1,Y1,X2,Y2   only look inside this box (keeps stray text elsewhere out)
+#     --nth N                click the Nth match, top to bottom (default 1)
+#     --tries N              look up to N times (default 1)
+#     --scroll-key KEY       after a miss, press KEY before the next try
+#                            (down, up, pagedown, pageup, home, end, tab, enter)
+#     --interval SECS        wait between tries (default 1)
+#     --dry-run              print "X Y" and do not click
+#
+# The click goes through promptos-click, so the pointer position is still
+# verified before anything is clicked. Exit: 0 clicked, 4 text not found,
+# anything else comes from promptos-click or promptos-find-text.
+set -u
+
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 1; }
+
+region=""; nth=1; tries=1; key=""; interval=1; dry=0; text=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --region)     [ $# -ge 2 ] || usage; region=$2; shift 2 ;;
+    --nth)        [ $# -ge 2 ] || usage; nth=$2; shift 2 ;;
+    --tries)      [ $# -ge 2 ] || usage; tries=$2; shift 2 ;;
+    --scroll-key) [ $# -ge 2 ] || usage; key=$2; shift 2 ;;
+    --interval)   [ $# -ge 2 ] || usage; interval=$2; shift 2 ;;
+    --dry-run)    dry=1; shift ;;
+    -h|--help)    usage ;;
+    -*)           echo "promptos-click-text: unknown option $1" >&2; usage ;;
+    *)            text=$1; shift ;;
+  esac
+done
+[ -n "$text" ] || usage
+
+case "$key" in
+  "")       code="" ;;
+  down)     code=108 ;;
+  up)       code=103 ;;
+  pagedown) code=109 ;;
+  pageup)   code=104 ;;
+  home)     code=102 ;;
+  end)      code=107 ;;
+  tab)      code=15 ;;
+  enter)    code=28 ;;
+  *) echo "promptos-click-text: unknown --scroll-key $key" >&2; exit 1 ;;
+esac
+
+for try in $(seq 1 "$tries"); do
+  args=(--all)
+  [ -n "$region" ] && args+=(--region "$region")
+  matches=$(promptos-find-text "${args[@]}" "$text")
+  rc=$?
+  [ "$rc" -eq 2 ] && exit 2
+  if [ "$rc" -eq 0 ]; then
+    line=$(printf '%s\n' "$matches" | sed -n "${nth}p")
+    if [ -n "$line" ]; then
+      set -- $line
+      if [ "$dry" -eq 1 ]; then
+        echo "$1 $2"
+        exit 0
+      fi
+      exec promptos-click "$1" "$2" "$text"
+    fi
+  fi
+  if [ "$try" -lt "$tries" ]; then
+    if [ -n "$code" ]; then
+      promptos-input key "$code:1" "$code:0" >/dev/null 2>&1
+    fi
+    sleep "$interval"
+  fi
+done
+echo "promptos-click-text: '$text' not found" >&2
+exit 4

@@ -155,6 +155,19 @@ you can still drive NetworkManager directly:
 - After `windowactivate`, prefer `--sync` so focus settles before you type.
 - The Ctrl+Space overlay is yours; do not try to close or relaunch it.
 
+### Clicking by on-screen text (GNOME Wayland)
+On a Wayland session `xdotool` cannot see or click native windows, and AT-SPI
+reports every widget position as 0,0. Locate controls by OCR instead:
+- `promptos-click-text [--region X1,Y1,X2,Y2] [--tries N --scroll-key KEY] "label"`
+  finds the label on screen and clicks it through `promptos-click` (the pointer
+  position is verified first). Add `--dry-run` to print `X Y` without clicking.
+- `promptos-find-text [--region ...] [--dump] "label"` prints the centre `X Y`
+  of a label, or every recognised word with `--dump`.
+- Use `--region` to exclude your own terminal text, which OCR also reads.
+- Positions change when a window moves, so re-run the lookup each time.
+- Settings pages are nested: About is under System, not top level. To open a
+  page directly, `gnome-control-center about` is faster than clicking.
+
 ---
 
 ## Updating promptOS

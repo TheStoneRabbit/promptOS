@@ -47,6 +47,15 @@ FILES=(
     usr/local/bin/promptos-web
     usr/local/bin/promptos-firstboot
     usr/local/bin/promptos-wallpaper
+    usr/local/bin/promptos-pointer
+    usr/local/bin/promptos-screenshot
+    usr/local/bin/promptos-click
+    usr/local/bin/promptos-input
+    usr/local/bin/promptos-find-text
+    usr/local/bin/promptos-click-text
+    usr/local/bin/promptos-hands-off
+    usr/local/bin/promptos-status
+    usr/local/bin/promptos-patch
     usr/local/lib/promptos/
     etc/profile.d/promptsh.sh
     etc/profile.d/00-promptos-x.sh
@@ -104,7 +113,16 @@ chmod 755 /usr/local/bin/promptsh \
           /usr/local/bin/promptos-warmup \
           /usr/local/bin/promptos-firstboot \
           /usr/local/bin/promptos-wallpaper \
-          /usr/local/bin/promptos-install 2>/dev/null || true
+          /usr/local/bin/promptos-install \
+          /usr/local/bin/promptos-pointer \
+          /usr/local/bin/promptos-screenshot \
+          /usr/local/bin/promptos-click \
+          /usr/local/bin/promptos-input \
+          /usr/local/bin/promptos-find-text \
+          /usr/local/bin/promptos-click-text \
+          /usr/local/bin/promptos-hands-off \
+          /usr/local/bin/promptos-status \
+          /usr/local/bin/promptos-patch 2>/dev/null || true
 chmod 755 /etc/profile.d/promptsh.sh /root/.xinitrc \
           /etc/xdg/openbox/autostart 2>/dev/null || true
 # Ensure the desktop runtime packages the synced configs depend on are present,
@@ -114,12 +132,15 @@ chmod 755 /etc/profile.d/promptsh.sh /root/.xinitrc \
 if command -v pacman >/dev/null 2>&1; then
     pacman -S --needed --noconfirm \
         plank picom network-manager-applet konsole xdotool wmctrl feh \
-        openbox xorg-server xorg-xinit 2>/dev/null || true
+        openbox xorg-server xorg-xinit \
+        imagemagick tesseract tesseract-data-eng ydotool libnotify 2>/dev/null || true
 fi
 # Recompile python bytecode for slightly faster cold start.
 python -m compileall -q /usr/local/lib/promptos/ 2>/dev/null || true
 # Reload sshd if its drop-in changed (idempotent — fine to run regardless).
 systemctl reload sshd 2>/dev/null || true
+# Enable ydotoold (user unit shipped by the ydotool package) for all users.
+systemctl --global enable ydotool.service 2>/dev/null || true
 # Recompile dconf system db so wallpaper / login-screen changes apply.
 if command -v dconf >/dev/null 2>&1; then
     dconf update 2>/dev/null || true

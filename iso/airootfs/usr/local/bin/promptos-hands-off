@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# promptos-hands-off <seconds> "<reason>" — critical on-screen alert, blocks while the user keeps hands off the mouse
+secs=${1:-}; reason=${2:-automation running}
+case "$secs" in ''|*[!0-9]*) echo "usage: promptos-hands-off <seconds> \"<reason>\"" >&2; exit 1;; esac
+idf=/tmp/promptos-handsoff.id
+post() {
+  local rid args nid
+  rid=$(cat "$idf" 2>/dev/null)
+  args=(-p -a promptOS -u "$1" -t "$2")
+  [ -n "$rid" ] && args+=(-r "$rid")
+  nid=$(notify-send "${args[@]}" "HANDS OFF THE MOUSE" "$3" 2>/dev/null)
+  [ -n "$nid" ] && printf '%s' "$nid" > "$idf"
+}
+log="$HOME/.local/state/promptos/actions.log"
+mkdir -p "$(dirname "$log")"
+printf '%s hands-off for %ss: %s\n' "$(date '+%F %T')" "$secs" "$reason" >> "$log"
+end=$(( $(date +%s) + secs ))
+while :; do
+  rem=$(( end - $(date +%s) ))
+  [ "$rem" -le 0 ] && break
+  post critical 0 "Do not touch the mouse for ${rem}s: $reason"
+  step=5; [ "$rem" -lt "$step" ] && step=$rem
+  sleep "$step"
+done
+post normal 5000 "You can use the mouse again"
+exit 0
