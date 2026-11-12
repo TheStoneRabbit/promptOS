@@ -373,6 +373,25 @@ def _set_output_mode(mode: str):
     VERBOSE_OUTPUT = OUTPUT_MODE == "verbose"
 
 
+def _script_uses_sudo(cmd: str) -> bool:
+    """True if `cmd` runs a local script file that itself calls sudo."""
+    import re, shlex
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        return False
+    for tok in tokens[:8]:
+        path = os.path.expanduser(tok)
+        try:
+            if os.path.isfile(path) and os.path.getsize(path) < 200_000:
+                with open(path, "r", errors="ignore") as f:
+                    if re.search(r"\bsudo\b", f.read()):
+                        return True
+        except OSError:
+            continue
+    return False
+
+
 def _needs_sudo_password(cmd: str) -> bool:
     """True if `cmd` invokes sudo and sudo would have to ask for a password now."""
     try:
@@ -381,7 +400,7 @@ def _needs_sudo_password(cmd: str) -> bool:
     except AttributeError:
         return False
     import re
-    if not re.search(r"(?:^|[;&|(])\s*sudo(?:\s|$)", cmd):
+    if not re.search(r"(?:^|[;&|(])\s*sudo(?:\s|$)", cmd) and not _script_uses_sudo(cmd):
         return False
     try:
         return subprocess.run(["sudo", "-n", "true"], capture_output=True, timeout=5).returncode != 0

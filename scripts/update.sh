@@ -66,10 +66,19 @@ if ! command -v tar >/dev/null 2>&1; then
     exit 1
 fi
 
+# Ask for the sudo password now, before any other output, so the prompt is not
+# buried (or queued behind typed input) when install-local.sh needs root later.
+if [ -z "${DRY_RUN}" ] && [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    echo "==> Sudo password needed to install; asking now"
+    sudo -v
+    ( while kill -0 "$$" 2>/dev/null; do sudo -n true 2>/dev/null || exit; sleep 50; done ) &
+    SUDO_KEEPALIVE_PID=$!
+fi
+
 URL="https://codeload.github.com/${REPO}/tar.gz/${REF}"
 TMP_DIR="$(mktemp -d)"
 ARCHIVE="${TMP_DIR}/promptos.tar.gz"
-trap 'if [ -z "${KEEP}" ]; then rm -rf "${TMP_DIR}"; else echo "Kept: ${TMP_DIR}"; fi' EXIT
+trap 'if [ -n "${SUDO_KEEPALIVE_PID:-}" ]; then kill "${SUDO_KEEPALIVE_PID}" 2>/dev/null || true; fi; if [ -z "${KEEP}" ]; then rm -rf "${TMP_DIR}"; else echo "Kept: ${TMP_DIR}"; fi' EXIT
 
 echo "==> Downloading promptOS from ${URL}"
 curl -fL --retry 3 --connect-timeout 10 --max-time 300 "${URL}" -o "${ARCHIVE}"
