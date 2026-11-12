@@ -126,6 +126,29 @@ What it leaves alone (your per-machine state):
 Promptsh changes apply on next login (`exit` and reconnect).
 Console-font changes apply on next boot, or run `setfont $(awk -F= '/^FONT/{print $2}' /etc/vconsole.conf)`.
 
+### Pull from GitHub (on the machine itself)
+
+If the install is far behind, or you'd rather not push from a dev machine, run
+the updater directly on the installed system (it uses sudo if needed):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TheStoneRabbit/promptOS/main/scripts/update.sh | bash
+```
+
+It downloads the current `main` and runs `scripts/install-local.sh`, which
+syncs the same file set as `push.sh` and fixes permissions. Per-machine state
+is left alone, so an older install keeps its old `/etc/promptos/config`. To
+move it onto the current defaults (Claude as provider) run:
+
+```bash
+promptos-keys setup        # pick provider + paste key; writes config + keys
+```
+
+Installs from before the graphical desktop existed are missing the X/openbox
+packages. The updater tries `pacman -S --needed` for them, but on a months-old
+Arch install do a full `pacman -Syu` first (and reboot), or reflash from the
+current ISO for a clean start.
+
 ### Safe file edits
 
 promptOS includes `promptos-patch`, a small unified-diff applier for agent-driven
