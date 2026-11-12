@@ -17,7 +17,7 @@ The traditional shell is still available as an escape hatch (`!cmd`), but it's n
 ## Features
 
 - **Multi-provider AI**: auto-selects the best available — Claude, OpenAI, Groq, or Ollama (local/offline)
-- **Claude by default**: `claude-opus-5-5` is the base model; add a key with `/setup` on first boot
+- **Claude by default**: `claude-sonnet-5-5` is the base model (switch to `claude-opus-5-5` with `/llm-model`); add a key with `/setup` on first boot
 - **Root access**: AI runs as root with full system control
 - **Auto-fallback**: if a provider fails, automatically switches to the next available one
 - **Installer**: type `install promptOS` to install to disk from a USB drive
@@ -172,7 +172,7 @@ Auto-selected at boot in priority order:
 
 | Provider | Requires | Model |
 |----------|----------|-------|
-| `claude` | `ANTHROPIC_API_KEY` | `claude-opus-5-5` (default provider) |
+| `claude` | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` (default provider) |
 | `openai` | `OPENAI_API_KEY` | `gpt-5-mini` |
 | `groq` | `GROQ_API_KEY` (free at console.groq.com) | `llama-3.1-8b-instant` |
 | `ollama` | Nothing (download with `promptos-model pull`) | `qwen3:8b` (offline fallback) |

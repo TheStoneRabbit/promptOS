@@ -198,7 +198,7 @@ All `pacman` calls inside Docker need `--disable-sandbox` (seccomp restriction).
 
 ## AI Model Strategy
 
-- **Claude-first**: default provider is Claude API (`claude-opus-5-5`). Decided 2026-11-11: no small local model is reliable enough for multi-step root shell work, so Claude is the base model.
+- **Claude-first**: default provider is Claude API (`claude-sonnet-5-5`; `claude-opus-5-5` for hard tasks via `/llm-model`). Decided 2026-11-11: no small local model is reliable enough for multi-step root shell work, so Claude is the base model. Sonnet chosen as default for cost: agent loops make many calls per request.
 - **Offline fallback**: Ollama + `qwen3:8b` (best small tool-use model as of late 2026; not baked into the ISO, pulled on demand with `promptos-model pull`)
 - **Provider priority (auto mode)**: claude → openai → groq → ollama
 - **Override**: set `PROMPTOS_PROVIDER=ollama|openai|groq|auto` in `/etc/promptos/config` or env; API keys via `promptos-keys set claude <key>`

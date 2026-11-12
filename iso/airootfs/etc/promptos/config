@@ -12,8 +12,8 @@ PROMPTOS_OLLAMA_MODEL=qwen3:8b
 # Ollama server URL — change to http://10.0.2.2:11434 to use Ollama running on the host Mac
 PROMPTOS_OLLAMA_BASE_URL=http://localhost:11434
 
-# Claude model (provider=claude)
-PROMPTOS_CLAUDE_MODEL=claude-opus-5-5
+# Claude model (provider=claude). Sonnet is the default; use claude-opus-5-5 for harder tasks.
+PROMPTOS_CLAUDE_MODEL=claude-sonnet-5-5
 
 # OpenAI model (provider=openai)
 PROMPTOS_OPENAI_MODEL=gpt-5-mini

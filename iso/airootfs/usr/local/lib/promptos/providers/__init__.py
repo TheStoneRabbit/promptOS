@@ -33,7 +33,7 @@ _MODEL_ENV = {
 }
 
 _MODEL_DEFAULT = {
-    "claude": "claude-opus-5-5",
+    "claude": "claude-sonnet-5-5",
     "openai": "gpt-5-mini",
     "groq": "llama-3.1-8b-instant",
     "ollama": "qwen3:8b",
