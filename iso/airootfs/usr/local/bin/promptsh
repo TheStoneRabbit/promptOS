@@ -195,7 +195,9 @@ def _save_autorun_default(enabled: bool):
 # ── Command output display ────────────────────────────────────────────────────
 # Compact mode (default) keeps the screen readable: long command output is
 # collapsed to head + tail, with the full text kept for `/out` and for the AI.
-VERBOSE_OUTPUT     = False   # /verbose on → stream everything live (old behaviour)
+OUTPUT_MODES       = ("quiet", "compact", "verbose")
+OUTPUT_MODE        = "quiet"  # quiet | compact | verbose (set via /quiet /compact /verbose /output)
+VERBOSE_OUTPUT     = False    # derived: OUTPUT_MODE == "verbose" (stream everything live)
 COMPACT_MAX_LINES  = 12      # output up to this many lines is shown in full
 COMPACT_HEAD       = 4       # lines kept from the start of long output
 COMPACT_TAIL       = 4       # lines kept from the end of long output
@@ -204,19 +206,29 @@ OUTPUT_LOG_MAX     = 20      # how many command outputs /out can recall
 OUTPUT_LOG: list[dict] = []
 
 
-def _load_verbose_default() -> bool:
+def _load_output_mode() -> str:
+    env = os.environ.get("PROMPTOS_OUTPUT_MODE", "").strip().lower()
+    if env in OUTPUT_MODES:
+        return env
     env = os.environ.get("PROMPTOS_VERBOSE_OUTPUT", "").strip().lower()
     if env in ("1", "true", "yes", "on"):
-        return True
+        return "verbose"
     if env in ("0", "false", "no", "off"):
-        return False
-    value = _load_state().get("verbose_output")
-    return value if isinstance(value, bool) else VERBOSE_OUTPUT
-
-
-def _save_verbose_default(enabled: bool):
+        return "compact"
     state = _load_state()
-    state["verbose_output"] = bool(enabled)
+    mode = state.get("output_mode")
+    if mode in OUTPUT_MODES:
+        return mode
+    legacy = state.get("verbose_output")
+    if isinstance(legacy, bool):
+        return "verbose" if legacy else "compact"
+    return OUTPUT_MODE
+
+
+def _save_output_mode(mode: str):
+    state = _load_state()
+    state["output_mode"] = mode
+    state.pop("verbose_output", None)
     _save_state(state)
 
 
@@ -355,9 +367,10 @@ def show_output_log(arg: str = ""):
         print(f"\033[2m└─\033[0m \033[31mexit {code}\033[0m\n")
 
 
-def _set_verbose(enabled: bool):
-    global VERBOSE_OUTPUT
-    VERBOSE_OUTPUT = bool(enabled)
+def _set_output_mode(mode: str):
+    global OUTPUT_MODE, VERBOSE_OUTPUT
+    OUTPUT_MODE = mode if mode in OUTPUT_MODES else "quiet"
+    VERBOSE_OUTPUT = OUTPUT_MODE == "verbose"
 
 
 def _needs_sudo_password(cmd: str) -> bool:
@@ -1365,7 +1378,10 @@ def print_help():
             "  Long output is collapsed to the first and last few lines; [cyan]/out[/cyan] shows all of it.\n\n"
             "[bold]Output[/bold]\n\n"
             "  [cyan]/out \\[n|all][/cyan]       — full output of the last (or n-th last) command\n"
-            "  [cyan]/verbose[/cyan]           — toggle live full output instead of collapsed\n\n"
+            "  [cyan]/quiet[/cyan]             — one line per command (default)\n"
+            "  [cyan]/compact[/cyan]           — collapse long output to head + tail\n"
+            "  [cyan]/verbose[/cyan]           — stream every line live\n"
+            "  [cyan]/output[/cyan]            — show the current output mode\n\n"
             "[bold]Queue[/bold]\n\n"
             "  Start typing while the AI is responding and press Enter — it's sent next.\n"
             "  [cyan]/queue[/cyan]             — list queued messages\n"
@@ -1406,7 +1422,10 @@ def print_help():
 
   Output:
     /out [n|all]        — full output of the last (or n-th last) command
-    /verbose            — toggle live full output instead of collapsed
+    /quiet              — one line per command (default)
+    /compact            — collapse long output to head + tail
+    /verbose            — stream every line live
+    /output             — show the current output mode
 
   Queue:
     /queue              — list queued messages (/queue add <text> to add one)
@@ -1884,7 +1903,7 @@ def main():
     history: list[Message] = [Message("system", get_system_prompt())]
     active_provider = provider
     autorun = _load_autorun_default()
-    _set_verbose(_load_verbose_default())
+    _set_output_mode(_load_output_mode())
     ollama_warmed = False  # show a one-time "loading model" notice on first ollama prompt
 
     def save_history():
@@ -2147,14 +2166,25 @@ def main():
                 show_output_log(user_input[4:])
                 continue
 
-            if user_input in ("/verbose", "/verbose on", "/verbose off"):
-                turn_on = user_input == "/verbose on" or (user_input == "/verbose" and not VERBOSE_OUTPUT)
-                _set_verbose(turn_on)
-                _save_verbose_default(turn_on)
-                if turn_on:
-                    msg = "Verbose output ON — every line of command output is shown live (saved)"
+            if user_input in ("/quiet", "/compact", "/verbose", "/verbose on", "/verbose off", "/output") or user_input.startswith("/output "):
+                if user_input == "/output":
+                    new_mode = ""
+                elif user_input.startswith("/output "):
+                    new_mode = user_input.split(None, 1)[1].strip().lower()
+                elif user_input == "/verbose off":
+                    new_mode = "compact"
+                elif user_input == "/verbose" and OUTPUT_MODE == "verbose":
+                    new_mode = "compact"
                 else:
-                    msg = "Compact output ON — long output is collapsed; /out shows it all (saved)"
+                    new_mode = user_input.lstrip("/").split()[0]
+                if new_mode and new_mode not in OUTPUT_MODES:
+                    msg = f"Unknown output mode '{new_mode}' — use quiet, compact or verbose"
+                elif not new_mode:
+                    msg = f"Output mode: {OUTPUT_MODE} (change with /quiet, /compact or /verbose)"
+                else:
+                    _set_output_mode(new_mode)
+                    _save_output_mode(new_mode)
+                    msg = {"quiet": "Quiet output ON — one line per command (saved)", "compact": "Compact output ON — long output is collapsed; /out shows it all (saved)", "verbose": "Verbose output ON — every line of command output is shown live (saved)"}[new_mode]
                 if RICH:
                     console.print(f"  [green]{msg}[/green]\n")
                 else:
