@@ -131,8 +131,7 @@ fi
 python -m compileall -q /usr/local/lib/promptos/ 2>/dev/null || true
 # Reload sshd if its drop-in changed (idempotent — fine to run regardless).
 systemctl reload sshd 2>/dev/null || true
-# Recompile dconf system db so wallpaper / login-screen changes apply,
-# then bounce gdm if it's installed so the login screen picks them up.
+# Recompile dconf system db so wallpaper / login-screen changes apply.
 if command -v dconf >/dev/null 2>&1; then
     dconf update 2>/dev/null || true
 fi
@@ -141,10 +140,6 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 fi
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database /usr/share/applications 2>/dev/null || true
-fi
-if systemctl is-enabled gdm.service >/dev/null 2>&1; then
-    # Use try-restart so we don't kick a logged-in user unless gdm is already running.
-    systemctl try-restart gdm.service 2>/dev/null || true
 fi
 REMOTE
 
