@@ -1887,6 +1887,11 @@ os.replace(tmp_path, path)
         self._refresh_system_message()
 
         def _worker():
+            def _say(msg):
+                if not self._halted:
+                    self._add_assistant_message(msg)
+                return False
+
             try:
                 chunks = []
                 for chunk in self.active_provider.chat(self._request_messages(), stream=True):
@@ -1894,8 +1899,11 @@ os.replace(tmp_path, path)
                 response = "".join(chunks).strip()
                 if response:
                     GLib.idle_add(self._on_command_followup_ready, response)
-            except Exception:
-                return
+                else:
+                    stop = getattr(self.active_provider, "last_stop_reason", "") or "unknown"
+                    GLib.idle_add(_say, f"Empty reply from {self.active_provider.name} (stop_reason={stop}). Send your message again.")
+            except Exception as e:
+                GLib.idle_add(_say, f"Provider error: {e}")
 
         threading.Thread(target=_worker, daemon=True).start()
 
