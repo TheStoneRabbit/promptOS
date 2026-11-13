@@ -462,6 +462,56 @@ def install_bootloader():
         )
 
 
+def install_gnome():
+    """Install GNOME + GDM into the target (optional, needs internet).
+
+    Runs only when the user opts in. A failed pacman run returns early so the
+    Openbox desktop is left untouched.
+    """
+    manual = "pacman -Syu --noconfirm gnome gdm gnome-backgrounds && systemctl enable gdm"
+    if not is_online():
+        print(f"Skipping GNOME install: offline. Later, run: {manual}")
+        return False
+    print_step("Installing GNOME", "~1.5 GB from Arch mirrors; may take 10-20 minutes.")
+    run(f"cp /etc/resolv.conf {MOUNTPOINT}/etc/resolv.conf", check=False)
+    # -Syu, not -Sy: a partial upgrade can break Arch.
+    rc = run(
+        f"arch-chroot {MOUNTPOINT} pacman -Syu --noconfirm gnome gdm gnome-backgrounds",
+        check=False,
+    )
+    if rc != 0:
+        print(f"GNOME install failed; Openbox desktop unchanged. Retry later: {manual}")
+        return False
+    run(f"arch-chroot {MOUNTPOINT} systemctl enable gdm.service", check=False)
+    # Drop the root tty1 autologin so it doesn't fight GDM.
+    run(f"rm -f {MOUNTPOINT}/etc/systemd/system/getty@tty1.service.d/autologin.conf", check=False)
+    # Super+Space opens the promptOS bar. GNOME binds it to input-source switching.
+    key = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/promptos/"
+    os.makedirs(f"{MOUNTPOINT}/etc/dconf/db/local.d", exist_ok=True)
+    with open(f"{MOUNTPOINT}/etc/dconf/db/local.d/02-promptos-keybindings", "w") as f:
+        f.write(
+            "[org/gnome/desktop/wm/keybindings]\n"
+            "switch-input-source=@as []\n"
+            "switch-input-source-backward=@as []\n\n"
+            "[org/gnome/settings-daemon/plugins/media-keys]\n"
+            f"custom-keybindings=['{key}']\n\n"
+            f"[{key.strip('/')}]\n"
+            "name='promptOS'\n"
+            "command='/usr/local/bin/promptos-gui --overlay --toggle'\n"
+            "binding='<Super>space'\n"
+        )
+    run(f"arch-chroot {MOUNTPOINT} dconf update", check=False)
+    os.makedirs(f"{MOUNTPOINT}/etc/xdg/autostart", exist_ok=True)
+    with open(f"{MOUNTPOINT}/etc/xdg/autostart/promptos-gui.desktop", "w") as f:
+        f.write(
+            "[Desktop Entry]\nType=Application\nName=promptOS\n"
+            "Exec=/usr/local/bin/promptos-gui --overlay --hidden\n"
+            "OnlyShowIn=GNOME;\n"
+        )
+    print("GNOME installed and GDM enabled. Log in as your admin user.")
+    return True
+
+
 def install_promptos():
     """Copy promptOS files into the installed system."""
     copies = [
@@ -637,7 +687,17 @@ def main():
     # ── Desktop environment ───────────────────────────────────────────────────
     # The graphical promptOS desktop (X11 + openbox + the AI search bar) ships
     # in the live system and is cloned to the target by install_base(), so it is
-    # installed by default with no extra download. Nothing to choose here.
+    # installed by default with no extra download. GNOME is an optional extra.
+    install_gnome_choice = False
+    print_step(
+        "Desktop Environment (optional)",
+        "GNOME adds a graphical desktop (~1.5 GB download, needs internet).\n"
+        "Skip it to keep the promptOS Openbox desktop."
+    )
+    if is_online():
+        install_gnome_choice = confirm("Install GNOME desktop after the base install?", default=False)
+    else:
+        print("Offline: skipping GNOME prompt. You can install it later.")
 
     # ── Install ───────────────────────────────────────────────────────────────
     print_step(
@@ -661,12 +721,28 @@ def main():
     print_step("Installing Bootloader")
     install_bootloader()
 
+    gnome_ok = False
+    if install_gnome_choice:
+        gnome_ok = install_gnome()
+
     # ── Done ──────────────────────────────────────────────────────────────────
-    print_step(
-        "Installation Complete!",
+    done_msg = (
         f"promptOS has been installed to {target_disk}.\n\n"
         "Remove the USB drive and reboot."
     )
+    if gnome_ok:
+        done_msg += (
+            "\n\nAfter logging in to GNOME as your admin user, run:\n"
+            "  sudo promptos-firstboot --force\n"
+            "to set up your AI provider, then log out and back in.\n"
+            "Summon the promptOS bar with Super+Space."
+        )
+    elif install_gnome_choice:
+        done_msg += (
+            "\n\nGNOME was not installed. After first boot, retry with:\n"
+            "  sudo pacman -Syu gnome gdm gnome-backgrounds && sudo systemctl enable gdm"
+        )
+    print_step("Installation Complete!", done_msg)
 
     if confirm("Reboot now?", default=True):
         run("reboot")

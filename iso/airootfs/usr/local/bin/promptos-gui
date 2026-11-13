@@ -34,7 +34,9 @@ from typing import Callable
 # device") and windows never map. Force the software cairo renderer so the UI
 # always displays. Set GSK_RENDERER in the environment to override.
 os.environ.setdefault("GSK_RENDERER", "cairo")
-os.environ.setdefault("GDK_BACKEND", "x11")
+# Openbox/X11 on the live ISO needs x11; under a Wayland session (GNOME) go native.
+if not os.environ.get("WAYLAND_DISPLAY"):
+    os.environ.setdefault("GDK_BACKEND", "x11")
 
 try:
     import gi
@@ -987,15 +989,21 @@ class PromptOSWindow(Adw.ApplicationWindow):
     def reveal_overlay(self):
         self._overlay_shown = True
         self.set_visible(True)
-        self.unminimize()
+        if not os.environ.get("WAYLAND_DISPLAY"):
+            self.unminimize()
         self.present()
         GLib.idle_add(self.entry.grab_focus)
         GLib.idle_add(self._update_actions_cap)
 
     def hide_overlay(self):
-        # minimize (not unmap) so position/size persist for the next summon
         self._overlay_shown = False
-        self.minimize()
+        if os.environ.get("WAYLAND_DISPLAY"):
+            # Wayland can't restore a minimized window, and apps can't position
+            # windows there, so there is no position to preserve: just hide it.
+            self.set_visible(False)
+        else:
+            # X11: minimize (not unmap) so position/size persist for the next summon
+            self.minimize()
 
     def toggle_overlay(self):
         # Ctrl+Space again while open closes it, regardless of focus.
@@ -2883,6 +2891,9 @@ class PromptOSApp(Adw.Application):
         # Force the dark color scheme so text is light on the dark surfaces
         # (otherwise assistant text falls back to the light theme's near-black).
         Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+        if self.overlay:
+            # Keep the resident instance alive while its window is hidden.
+            self.hold()
 
     def _ensure_window(self) -> "PromptOSWindow":
         window = self.props.active_window
@@ -2904,6 +2915,9 @@ class PromptOSApp(Adw.Application):
         # new window.
         args = command_line.get_arguments()
         window = self._ensure_window()
+        if self.overlay and "--hidden" in args:
+            # Login autostart: stay resident but wait for the hotkey to show the bar.
+            return 0
         if self.overlay and "--toggle" in args:
             window.toggle_overlay()
         elif self.overlay:
