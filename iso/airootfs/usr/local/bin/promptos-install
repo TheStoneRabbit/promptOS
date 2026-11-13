@@ -280,7 +280,7 @@ def create_admin_user(username: str, password: str):
     # Create the user. `-m` creates /home/<user> from /etc/skel.
     # `check=False` so a re-run doesn't abort when the user already exists.
     run(
-        f"arch-chroot {MOUNTPOINT} useradd -m -G wheel -s /bin/bash {username}",
+        f"arch-chroot {MOUNTPOINT} useradd -m -G wheel,input -s /bin/bash {username}",
         check=False,
     )
     set_user_password(username, password)

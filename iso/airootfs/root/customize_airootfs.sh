@@ -37,6 +37,11 @@ systemctl enable NetworkManager.service 2>/dev/null || true
 # so NetworkManager has unambiguous ownership of the wired interface.
 rm -f /etc/systemd/network/20-wired.network
 
+# -- ydotoold: input synthesis for promptos-input / promptos-click --
+# Enable the package's user unit for every user so it starts at login.
+echo "[promptOS] Enabling ydotoold user service..."
+systemctl --global enable ydotool.service 2>/dev/null || true
+
 # ── Pre-compile Python bytecode for faster startup ────────────────────────────
 echo "[promptOS] Pre-compiling Python bytecode..."
 python -m compileall -q /usr/local/lib/promptos/ 2>/dev/null || true

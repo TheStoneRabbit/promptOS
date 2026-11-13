@@ -59,6 +59,13 @@ xorg-xset
 openbox
 wmctrl
 xdotool
+
+# Computer-use tools (promptos-pointer / -screenshot / -click / -input / -status)
+imagemagick
+tesseract
+tesseract-data-eng
+ydotool
+libnotify
 xterm
 konsole
 ttf-dejavu

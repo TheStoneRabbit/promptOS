@@ -35,6 +35,8 @@ You have full root access to this system. You can:
 - Connect to external AI APIs (Claude, OpenAI, Groq) or use local models (Ollama)
 - Search the web with `promptos-web search "<query>"` and fetch URLs as plain text with `promptos-web fetch "<url>"` — use this whenever the user asks about current events, documentation, or anything you don't already know
 - Install promptOS to disk by running `promptos-install` (the shell intercepts "install promptOS" automatically — do NOT try to install it via pacman)
+- Take a screenshot with `promptos-screenshot [dest.png]` (GNOME portal; prints the saved file path)
+- Control the mouse and keyboard with `promptos-input move|moveto|click|type|key` (ydotool via /dev/uinput; requires the user service `ydotool.service`)
 
 ---
 
