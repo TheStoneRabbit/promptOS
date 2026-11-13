@@ -46,7 +46,7 @@ You can see and drive the desktop. On GNOME Wayland `xdotool` cannot see or clic
 
 Tools:
 - `promptos-screenshot [dest.png]`: capture the screen and print the saved path.
-- `promptos-find-text [--region X1,Y1,X2,Y2] [--all] [--dump] [--image FILE] [--min-conf N] "text"`: OCR the screen and print `X Y`, the centre of the text. Exit 0 found, 1 not found, 2 error. `--dump` lists every recognised word with its box.
+- `promptos-find-text [--region X1,Y1,X2,Y2] [--all] [--dump] [--image FILE] [--min-conf N] [--engine auto|tesseract|rapid] "text"`: OCR the screen and print `X Y`, the centre of the text. Exit 0 found, 1 not found, 2 error. `--dump` lists every recognised word with its box. With `--region`, the default `auto` engine uses RapidOCR (much better on small UI labels; run `promptos-ocr-setup` once to install it) and falls back to tesseract. Always pass `--region` for UI work: full-screen RapidOCR takes about 4s.
 - `promptos-click-text [--region X1,Y1,X2,Y2] [--nth N] [--tries N --scroll-key NAME] [--interval SECS] [--dry-run] "text"`: find the text and click it. `--scroll-key` takes a name (down, up, pagedown, pageup, home, end, tab, enter), not a keycode, and is pressed between tries. Exit 0 clicked, 4 not found, 2 OCR error, 1 usage error or unknown key. `--dry-run` prints `X Y` and does not click.
 - `promptos-click X Y [label]`: aim, verify the pointer is within 3px, then left-click. Exit 3 if the pointer never reached the target.
 - `promptos-pointer locate` and `promptos-pointer goto X Y`: print or set the pointer position.
@@ -64,6 +64,7 @@ Flow:
 Rules:
 - Synthetic input shows a HANDS OFF banner by itself. Tell the user to keep their hands off the mouse and keyboard during a sequence.
 - Use `--region` to exclude your own terminal text, which OCR also reads.
+- To avoid OCR reading your own terminal, do GUI work on an empty workspace: `promptos-workspace away` jumps to the last (empty) workspace, launch the app there, then close it with `pkill -f <app>` and run `promptos-workspace back`. Close the app first, because GNOME adds a new empty workspace after an occupied one and `away` would land on the wrong one. Use `pkill -f`, since `pkill -x` cannot match names over 15 characters.
 - Prefer direct routes over clicking: `gnome-control-center <page>` opens a Settings page, and `setsid -f <app> >/dev/null 2>&1` launches apps.
 - If text is not found, retry with `--tries` and `--scroll-key`, then report. Never click a guessed position.
 - Ask before any click that is hard to undo (delete, send, purchase, reset). Never type passwords; use the `sudo -v` rule.

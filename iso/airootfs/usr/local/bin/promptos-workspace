@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# promptos-workspace away|back
+# away: jump to the last (always empty, dynamic workspaces) GNOME workspace
+# back: return to workspace 1
+# Uses Super+End / Super+Home through promptos-input (ydotool).
+set -euo pipefail
+settle="${PROMPTOS_WS_SETTLE:-1.5}"
+case "${1:-}" in
+  away)
+    promptos-status "Moving to empty workspace" >/dev/null 2>&1 || true
+    promptos-input key 125:1 107:1 107:0 125:0
+    ;;
+  back)
+    promptos-status "Returning to workspace 1" >/dev/null 2>&1 || true
+    promptos-input key 125:1 102:1 102:0 125:0
+    ;;
+  *)
+    echo "usage: promptos-workspace away|back" >&2
+    exit 1
+    ;;
+esac
+sleep "$settle"

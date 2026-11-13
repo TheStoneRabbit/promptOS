@@ -52,6 +52,9 @@ FILES=(
     usr/local/bin/promptos-click
     usr/local/bin/promptos-input
     usr/local/bin/promptos-find-text
+    usr/local/bin/promptos-ocr-rapid
+    usr/local/bin/promptos-ocr-setup
+    usr/local/bin/promptos-workspace
     usr/local/bin/promptos-click-text
     usr/local/bin/promptos-hands-off
     usr/local/bin/promptos-status
@@ -119,6 +122,9 @@ chmod 755 /usr/local/bin/promptsh \
           /usr/local/bin/promptos-click \
           /usr/local/bin/promptos-input \
           /usr/local/bin/promptos-find-text \
+          /usr/local/bin/promptos-ocr-rapid \
+          /usr/local/bin/promptos-ocr-setup \
+          /usr/local/bin/promptos-workspace \
           /usr/local/bin/promptos-click-text \
           /usr/local/bin/promptos-hands-off \
           /usr/local/bin/promptos-status \

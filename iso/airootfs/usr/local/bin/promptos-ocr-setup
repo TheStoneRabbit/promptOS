@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# promptos-ocr-setup — install the RapidOCR backend used by promptos-find-text.
+# Creates a Python venv (default ~/.local/share/promptos/ocr-venv, override with
+# PROMPTOS_OCR_VENV) and installs rapidocr + onnxruntime. About 400 MB, no sudo.
+set -eu
+venv=${PROMPTOS_OCR_VENV:-$HOME/.local/share/promptos/ocr-venv}
+mkdir -p "$(dirname "$venv")"
+python3 -m venv "$venv"
+"$venv/bin/pip" install --quiet rapidocr onnxruntime
+# load once so any model files are fetched now, not on the first lookup
+"$venv/bin/python3" -c 'from rapidocr import RapidOCR; RapidOCR()' >/dev/null 2>&1
+echo "promptos-ocr-setup: RapidOCR ready in $venv"

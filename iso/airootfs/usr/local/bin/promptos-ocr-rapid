@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+# promptos-ocr-rapid — RapidOCR backend for promptos-find-text.
+#
+# Usage: promptos-ocr-rapid IMAGE [--region X1,Y1,X2,Y2]
+# Run it with the OCR venv python (see promptos-ocr-setup). Prints a JSON list of
+# {"text","l","t","w","h","conf"} in full-image pixel coordinates; conf is 0-100.
+# RapidOCR returns whole text lines, so each line is split into words and the
+# word boxes are estimated from character widths.
+import argparse
+import json
+import sys
+
+ap = argparse.ArgumentParser()
+ap.add_argument("image")
+ap.add_argument("--region")
+a = ap.parse_args()
+
+# the OCR library logs to stdout; keep stdout clean for the JSON
+real_out = sys.stdout
+sys.stdout = sys.stderr
+
+import numpy as np
+from PIL import Image
+from rapidocr import RapidOCR
+
+img = Image.open(a.image).convert("RGB")
+ox = oy = 0
+if a.region:
+    x1, y1, x2, y2 = (int(v) for v in a.region.split(","))
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(img.width, x2), min(img.height, y2)
+    if x2 <= x1 or y2 <= y1:
+        print("[]", file=real_out)
+        sys.exit(0)
+    img = img.crop((x1, y1, x2, y2))
+    ox, oy = x1, y1
+
+eng = RapidOCR(params={"Global.use_cls": False})
+res = eng(np.array(img)[:, :, ::-1])
+
+rows = []
+if res.txts:
+    for box, text, score in zip(res.boxes, res.txts, res.scores):
+        xs = [float(p[0]) for p in box]
+        ys = [float(p[1]) for p in box]
+        l, t = min(xs), min(ys)
+        w, h = max(xs) - l, max(ys) - t
+        toks = text.split()
+        if not toks:
+            continue
+        wts = [sum(2 if ord(c) > 0x2E80 else 1 for c in tk) for tk in toks]
+        total = sum(wts) + len(toks) - 1
+        pos = 0
+        for tk, wt in zip(toks, wts):
+            rows.append({
+                "text": tk,
+                "l": int(round(ox + l + w * pos / total)),
+                "t": int(round(oy + t)),
+                "w": max(1, int(round(w * wt / total))),
+                "h": max(1, int(round(h))),
+                "conf": float(score) * 100,
+            })
+            pos += wt + 1
+
+json.dump(rows, real_out)
+real_out.write("\n")

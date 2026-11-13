@@ -8,6 +8,7 @@
 #     --all                  print every match (default: first match, top to bottom)
 #     --dump                 print every recognised word and its box, then exit
 #     --min-conf N           ignore words below this OCR confidence (default 30)
+#     --engine E             auto (default), tesseract or rapid; auto uses RapidOCR when --region is given
 #
 # Output: "X Y" per match: the centre of the matched text, in the same pixel
 # space as promptos-pointer goto / promptos-click (screenshot pixels).
@@ -18,8 +19,10 @@
 import argparse
 import csv
 import io
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -55,6 +58,42 @@ def ocr(image, min_conf):
             continue
         words.append({"text": text, "n": norm(text), "l": l, "t": t, "w": w, "h": h})
     return words
+
+
+def ocr_rapid(image, region, min_conf):
+    venv = os.environ.get("PROMPTOS_OCR_VENV") or os.path.expanduser("~/.local/share/promptos/ocr-venv")
+    py = os.path.join(venv, "bin", "python3")
+    helper = shutil.which("promptos-ocr-rapid") or os.path.join(os.path.dirname(os.path.realpath(__file__)), "promptos-ocr-rapid")
+    if not (os.access(py, os.X_OK) and os.path.exists(helper)):
+        return None
+    cmd = [py, helper, image]
+    if region:
+        cmd += ["--region", ",".join(str(v) for v in region)]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        return None
+    try:
+        rows = json.loads(p.stdout)
+    except ValueError:
+        return None
+    words = []
+    for r in rows:
+        text = r["text"].strip()
+        if not text or r["conf"] < min_conf:
+            continue
+        words.append({"text": text, "n": norm(text), "l": r["l"], "t": r["t"], "w": r["w"], "h": r["h"]})
+    return words
+
+
+def ocr_any(image, region, min_conf, engine):
+    if engine == "rapid" or (engine == "auto" and region):
+        words = ocr_rapid(image, region, min_conf)
+        if words is not None:
+            return words
+        if engine == "rapid":
+            print("promptos-find-text: RapidOCR unavailable (run promptos-ocr-setup)", file=sys.stderr)
+            sys.exit(2)
+    return ocr(image, min_conf)
 
 
 def in_region(word, region):
@@ -114,6 +153,7 @@ def main():
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--dump", action="store_true")
     ap.add_argument("--min-conf", type=float, default=30)
+    ap.add_argument("--engine", choices=["auto", "tesseract", "rapid"], default="auto")
     a = ap.parse_args()
     if not a.text and not a.dump:
         ap.print_usage(sys.stderr)
@@ -139,7 +179,7 @@ def main():
                 print("promptos-find-text: screenshot failed: " + p.stderr.strip(), file=sys.stderr)
                 return 2
             image = tmp
-        words = [w for w in ocr(image, a.min_conf) if in_region(w, region)]
+        words = [w for w in ocr_any(image, region, a.min_conf, a.engine) if in_region(w, region)]
     finally:
         if tmp and os.path.exists(tmp):
             os.remove(tmp)
