@@ -2875,9 +2875,13 @@ os.replace(tmp_path, path)
             child = nxt
 
         if not self.suggested_next_items:
-            self._suggest_row.set_visible(False)
+            # Keep the row's space reserved (just invisible) so showing the
+            # suggestions later doesn't resize the chat viewport.
+            self._suggest_row.set_opacity(0.0)
+            self._suggest_row.set_can_target(False)
             return
-        self._suggest_row.set_visible(True)
+        self._suggest_row.set_opacity(1.0)
+        self._suggest_row.set_can_target(True)
 
         for suggestion in self.suggested_next_items:
             btn = Gtk.Button()
