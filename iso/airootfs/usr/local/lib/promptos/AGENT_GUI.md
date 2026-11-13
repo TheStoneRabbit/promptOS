@@ -158,7 +158,7 @@ you can still drive NetworkManager directly:
 ### Clicking by on-screen text (GNOME Wayland)
 On a Wayland session `xdotool` cannot see or click native windows, and AT-SPI
 reports every widget position as 0,0. Locate controls by OCR instead:
-- `promptos-click-text [--region X1,Y1,X2,Y2] [--tries N --scroll-key KEY] "label"`
+- `promptos-click-text [--region X1,Y1,X2,Y2] [--tries N --scroll-key NAME] "label"`
   finds the label on screen and clicks it through `promptos-click` (the pointer
   position is verified first). Add `--dry-run` to print `X Y` without clicking.
 - `promptos-find-text [--region ...] [--dump] "label"` prints the centre `X Y`
@@ -167,6 +167,34 @@ reports every widget position as 0,0. Locate controls by OCR instead:
 - Positions change when a window moves, so re-run the lookup each time.
 - Settings pages are nested: About is under System, not top level. To open a
   page directly, `gnome-control-center about` is faster than clicking.
+
+### GUI toolkit reference and flow (GNOME Wayland)
+
+These tools are all on PATH. Coordinates are screenshot pixels everywhere. On Wayland, prefer them over `xdotool`.
+
+Tools:
+- `promptos-screenshot [dest.png]`: capture the screen and print the saved path.
+- `promptos-find-text [--region X1,Y1,X2,Y2] [--all] [--dump] [--image FILE] [--min-conf N] "text"`: OCR the screen and print `X Y`, the centre of the text. Exit 0 found, 1 not found, 2 error. `--dump` lists every recognised word with its box.
+- `promptos-click-text [--region X1,Y1,X2,Y2] [--nth N] [--tries N --scroll-key NAME] [--interval SECS] [--dry-run] "text"`: find the text and click it. `--scroll-key` takes a name (down, up, pagedown, pageup, home, end, tab, enter), not a keycode, and is pressed between tries. Exit 0 clicked, 4 not found, 2 OCR error, 1 usage error or unknown key. `--dry-run` prints `X Y` and does not click.
+- `promptos-click X Y [label]`: aim, verify the pointer is within 3px, then left-click. Exit 3 if the pointer never reached the target.
+- `promptos-pointer locate` and `promptos-pointer goto X Y`: print or set the pointer position.
+- `promptos-input move DX DY | moveto X Y | click [left|right|middle] | type "text" | key CODE:1 CODE:0`: raw synthetic input. Keys are Linux keycodes (Enter 28, End 107). Needs the user service `ydotool.service`.
+- `promptos-status "text"`: one-line on-screen status, also written to the action log.
+- `promptos-hands-off SECS "reason"`: blocks for SECS seconds while showing a critical HANDS OFF alert.
+
+Flow:
+1. Tell the user what you are about to do (`promptos-status` is optional, since `promptos-click` already posts status).
+2. Observe: `promptos-screenshot`, or `promptos-find-text --dump` on the area you care about.
+3. Locate by OCR. Never guess coordinates, and re-run the lookup before every click because windows move.
+4. Act: prefer `promptos-click-text`; use `promptos-click X Y` for a known spot; type with `promptos-input type` and `key`.
+5. Verify: OCR the result area. Exit 0 from a click only means the pointer was in place, not that the app responded.
+
+Rules:
+- Synthetic input shows a HANDS OFF banner by itself. Tell the user to keep their hands off the mouse and keyboard during a sequence.
+- If text is not found, retry with `--tries` and `--scroll-key`, then report. Never click a guessed position.
+- Prefer direct routes over clicking: `gnome-control-center <page>` opens a Settings page, and `setsid -f <app> >/dev/null 2>&1` launches apps.
+- Ask before any click that is hard to undo (delete, send, purchase, reset). Never type passwords; use the `sudo -v` rule.
+- Use `--region` to exclude your own terminal text, which OCR also reads.
 
 ---
 
