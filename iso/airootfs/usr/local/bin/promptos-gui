@@ -1067,7 +1067,12 @@ class PromptOSWindow(Adw.ApplicationWindow):
         try:
             idle = float(os.environ.get("PROMPTOS_GUI_HIDE_IDLE", "4"))
             rt = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
-            ts = int(Path(rt, "promptos-input.last").read_text().strip() or 0)
+            ts = 0
+            for _n in ("promptos-input.last", "promptos-capture.last"):
+                try:
+                    ts = max(ts, int(Path(rt, _n).read_text().strip() or 0))
+                except Exception:
+                    pass
             return (time.time() - ts) <= idle
         except Exception:
             return False

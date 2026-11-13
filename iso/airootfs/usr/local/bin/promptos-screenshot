@@ -7,6 +7,7 @@
 import os
 import shutil
 import sys
+import time
 import urllib.parse
 import uuid
 
@@ -15,8 +16,22 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib
 
 
+def stamp():
+    """Tell promptos-gui to hide (it watches this file). Returns True if it was already hidden."""
+    f = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "promptos-capture.last")
+    try:
+        prev = int(open(f).read().strip() or 0)
+    except Exception:
+        prev = 0
+    with open(f, "w") as fh:
+        fh.write(str(int(time.time())))
+    return (time.time() - prev) <= 3
+
+
 def main():
     dest = sys.argv[1] if len(sys.argv) > 1 else None
+    # Let the GUI hide itself before the capture so it never appears in the image.
+    time.sleep(0.3 if stamp() else 1.0)
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     token = "promptos_" + uuid.uuid4().hex[:8]
     sender = bus.get_unique_name()[1:].replace(".", "_")
@@ -51,6 +66,7 @@ def main():
 
     GLib.timeout_add_seconds(30, on_timeout)
     loop.run()
+    stamp()  # keep the GUI hidden while the caller runs OCR on the image
 
     if "code" not in result:
         print("promptos-screenshot: timed out waiting for the portal", file=sys.stderr)
