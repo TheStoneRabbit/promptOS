@@ -95,12 +95,12 @@ frame.table-cell-header {
   background-color: rgba(79, 70, 229, 0.28);
 }
 frame.user-bubble {
-  background-image: linear-gradient(135deg, #0f6d8c 0%, #1293b0 55%, #54c2d9 100%);
-  border-radius: 14px;
+  background-image: linear-gradient(135deg, #8030f0 0%, #4a80f5 100%);
+  border-radius: 18px;
 }
 frame.user-bubble > border {
-  border-radius: 14px;
-  border: 1px solid rgba(84, 194, 217, 0.6);
+  border-radius: 18px;
+  border: 1px solid rgba(144, 100, 245, 0.55);
 }
 frame.user-bubble label {
   color: #ffffff;
@@ -160,8 +160,15 @@ box.window-topbar {
 /* Assistant bubbles + general text - light on dark (force-dark also handles
    this, but set it explicitly so text is never black on the dark surface). */
 frame.assistant-bubble {
-  background-color: rgba(255, 255, 255, 0.05);
+  background-color: transparent;
   border-radius: 14px;
+}
+frame.assistant-bubble > border {
+  border: none;
+}
+label.thinking-label {
+  color: #a78bfa;
+  font-style: italic;
 }
 frame.assistant-bubble label,
 label.md-heading {
@@ -219,6 +226,43 @@ MODEL_CATALOG_HINTS = {
 DETACH_COMMANDS = {"firefox", "chromium", "google-chrome", "brave", "code", "nautilus", "thunar"}
 SUDO_PREFIX_RE = re.compile(r"^\s*(?:/usr/bin/)?sudo\b\s*")
 INLINE_SUDO_RE = re.compile(r"(^|[;&|]\s*)((?:/usr/bin/)?sudo)\b(?!\s+-A)", re.IGNORECASE)
+
+
+class ThinkingIndicator(Gtk.Box):
+    """Animated sparkle (Cairo) plus a cycling status word, shown while the AI works."""
+
+    def __init__(self):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.set_margin_start(14)
+        self.set_margin_end(14)
+        self.set_margin_top(6)
+        self.set_margin_bottom(6)
+        self._t = 0.0
+        self._tick_id = 0
+        self._word = 0
+        self._label = Gtk.Label(label="Thinking.", xalign=0)
+        self._label.add_css_class("thinking-label")
+        self.append(self._label)
+        self.set_visible(False)
+
+    def start(self):
+        self.set_visible(True)
+        if not self._tick_id:
+            self._tick_id = GLib.timeout_add(50, self._tick)
+
+    def stop(self):
+        if self._tick_id:
+            GLib.source_remove(self._tick_id)
+            self._tick_id = 0
+        self.set_visible(False)
+
+    def _tick(self):
+        self._t += 0.05
+        dots = int(self._t / 0.4) % 3 + 1
+        if dots != self._word:
+            self._word = dots
+            self._label.set_text("Thinking" + "." * dots)
+        return True
 
 
 class ChatBubble(Gtk.Box):
@@ -638,6 +682,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.suggested_next_text = ""
         self.suggested_next_items: list[str] = []
         self.suggest_request_seq = 0
+        self._batched_results: list[str] = []   # results waiting for ONE combined follow-up
+        self._sudo_failed = False               # sudo rejected the password: halt everything
+        self._thinking = ThinkingIndicator()
         self.current_cwd = os.getcwd()
         self.session_search_text = ""
         self.follow_output = True
@@ -817,6 +864,8 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._cmd_frame = cmd_frame
         cmd_frame.set_margin_top(6)
         cmd_frame.set_margin_bottom(6)
+        cmd_frame.set_margin_start(10)
+        cmd_frame.set_margin_end(10)
         cmd_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         cmd_box.set_margin_top(8)
         cmd_box.set_margin_bottom(8)
@@ -844,6 +893,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         composer.set_margin_end(10)
 
         suggest_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._suggest_row = suggest_row
         suggest_row.set_margin_bottom(2)
         suggest_title = Gtk.Label(label="Suggested next:", xalign=0)
         suggest_title.add_css_class("caption")
@@ -1072,9 +1122,27 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.entry.get_buffer().set_text(text)
         self._submit()
 
+    def _thinking_start(self):
+        t = self._thinking
+        last = self.chat_list.get_last_child()
+        if t.get_parent() is None:
+            self.chat_list.append(t)
+        elif last is not t:
+            self.chat_list.reorder_child_after(t, last)
+        t.start()
+        if self.follow_output:
+            GLib.idle_add(self._scroll_to_bottom)
+
+    def _thinking_stop(self):
+        t = getattr(self, "_thinking", None)
+        if t is not None:
+            t.stop()
+
     def _add_bubble(self, role: str, text: str) -> ChatBubble:
         bubble = ChatBubble(role, text)
         self.chat_list.append(bubble)
+        if self._thinking.get_parent() is not None and self._thinking.get_visible():
+            self.chat_list.reorder_child_after(self._thinking, bubble)
         if self.follow_output:
             GLib.idle_add(self._scroll_to_bottom)
         return bubble
@@ -1111,6 +1179,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.send_btn.set_sensitive(enabled)
         self.stop_btn.set_sensitive(not enabled)
         if enabled:
+            self._thinking_stop()
             if not self.autorun_commands and self.pending_cards:
                 self._focus_run_on_next_pending_card()
             else:
@@ -1140,11 +1209,15 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._autosave_current_session()
         self._refresh_system_message()
         self._set_input_enabled(False)
+        self.suggest_request_seq += 1       # drop any in-flight suggestion request
+        self._batched_results = []
+        self._set_suggested_next_items([])  # hide suggestions until this turn is fully done
         self._generation_seq += 1
         generation_id = self._generation_seq
 
         bubble = self._add_bubble("assistant", "")
         self.current_assistant_bubble = bubble
+        self._thinking_start()
 
         def _worker():
             chunks: list[str] = []
@@ -1343,7 +1416,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.current_assistant_bubble = None
         self._set_input_enabled(True)
         self._parse_cmd_cards(response)
-        self._request_suggested_next_async()
+        self._suggest_if_idle()
         self._refresh_provider_badge()
         self._autosave_current_session()
         self._refresh_sessions()
@@ -1853,12 +1926,22 @@ os.replace(tmp_path, path)
         if output.strip():
             summary += f"\n\n```text\n{output}\n```"
         self._add_assistant_message(summary)
-        self._request_command_followup_async(command, code, output)
-        self._request_suggested_next_async()
+        if self._sudo_failed:
+            self._sudo_failed = False
+            self._halted = True
+            self._stop_all_commands()
+            self._batched_results = []
+            self.history.append(Message("user", "[command results]\n$ " + command + " -> exit " + str(code) + "\nsudo rejected the password. STOP and wait for the user; do not retry or run anything else."))
+            self._add_assistant_message("sudo rejected the password, so I stopped. Nothing else will run until you send another message.")
+            self._autosave_current_session()
+            self._set_input_enabled(True)
+            return False
+        self._record_command_result(command, code, output)
         self._autosave_current_session()
         self._start_next_queued_command()
         if not self.command_running:
             self.stop_btn.set_sensitive(False)
+            self._maybe_followup_or_suggest()
         if not self.autorun_commands:
             self._focus_run_on_next_pending_card()
             if not self.pending_cards:
@@ -1879,23 +1962,40 @@ os.replace(tmp_path, path)
             card.set_run_as_default(self)
             return
 
-    def _request_command_followup_async(self, command: str, code: int, output: str):
-        if not self.active_provider:
-            return
+    def _record_command_result(self, command: str, code: int, output: str):
         trimmed = (output or "").strip()
         if len(trimmed) > 1200:
             trimmed = trimmed[:1200] + "\n...[truncated]..."
-        feedback_lines = [
-            "[command results]",
-            f"$ {command} -> exit {code}",
-        ]
+        lines = [f"$ {command} -> exit {code}"]
         if trimmed:
-            feedback_lines.append(f"output:\n{trimmed}")
-        self.history.append(Message("user", "\n".join(feedback_lines)))
+            lines.append(f"output:\n{trimmed}")
+        self._batched_results.append("\n".join(lines))
+
+    def _maybe_followup_or_suggest(self):
+        # One follow-up per batch: only once every command has finished.
+        if self._halted or self.command_running or self.command_queue:
+            return
+        if self._batched_results:
+            self._request_command_followup_async()
+        else:
+            self._suggest_if_idle()
+
+    def _suggest_if_idle(self):
+        if self._halted or self.command_running or self.command_queue or self.pending_cards:
+            return
+        self._request_suggested_next_async()
+
+    def _request_command_followup_async(self):
+        results, self._batched_results = self._batched_results, []
+        if not self.active_provider or not results:
+            return
+        self.history.append(Message("user", "[command results]\n" + "\n\n".join(results)))
         self._refresh_system_message()
+        self._thinking_start()
 
         def _worker():
             def _say(msg):
+                self._thinking_stop()
                 if not self._halted:
                     self._add_assistant_message(msg)
                 return False
@@ -1916,12 +2016,13 @@ os.replace(tmp_path, path)
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_command_followup_ready(self, response: str):
+        self._thinking_stop()
         if self._halted:
             return False   # Stop pressed: drop the follow-up, don't continue the chain
         self.history.append(Message("assistant", response))
         self._add_assistant_message(response)
         self._parse_cmd_cards(response)
-        self._request_suggested_next_async()
+        self._suggest_if_idle()
         self._autosave_current_session()
         return False
 
@@ -2446,7 +2547,7 @@ os.replace(tmp_path, path)
         # entered once. If it's wrong, drop the cache and re-prompt once so a
         # stale cache can't silently fail every command.
         returncode, output = 1, "sudo cancelled by user"
-        for attempt in range(2):
+        for attempt in range(1):   # one attempt only: never retry a wrong password
             password = self._prompt_sudo_password(force=(attempt > 0))
             if password is None:
                 return 1, "sudo cancelled by user"
@@ -2461,11 +2562,10 @@ os.replace(tmp_path, path)
                     os.remove(askpass_path)
                 except OSError:
                     pass
-            if returncode != 0 and attempt == 0 and self._sudo_auth_failed(output):
-                self._sudo_password = None   # wrong password — drop the cache
-                if progress_callback:
-                    progress_callback("Incorrect password — try again...", None)
-                continue
+            if returncode != 0 and self._sudo_auth_failed(output):
+                self._sudo_password = None   # wrong password: drop the cache, never retry
+                self._sudo_failed = True
+                output += "\n[promptOS] sudo rejected the password. Not retrying."
             break
         return returncode, output
 
@@ -2775,11 +2875,9 @@ os.replace(tmp_path, path)
             child = nxt
 
         if not self.suggested_next_items:
-            placeholder = Gtk.Label(label="...", xalign=0)
-            placeholder.set_margin_start(8)
-            placeholder.set_margin_end(8)
-            self.suggest_cards_box.append(placeholder)
+            self._suggest_row.set_visible(False)
             return
+        self._suggest_row.set_visible(True)
 
         for suggestion in self.suggested_next_items:
             btn = Gtk.Button()
@@ -2836,7 +2934,6 @@ os.replace(tmp_path, path)
         self._refresh_system_message()
         self.suggest_request_seq += 1
         req_id = self.suggest_request_seq
-        GLib.idle_add(self._set_suggested_next, "Thinking...")
 
         snapshot = self.history[-8:]
         prompt = (

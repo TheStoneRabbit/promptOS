@@ -196,6 +196,10 @@ Rules:
 - If text is not found, retry with `--tries` and `--scroll-key`, then report. Never click a guessed position.
 - Prefer direct routes over clicking: `gnome-control-center <page>` opens a Settings page, and `setsid -f <app> >/dev/null 2>&1` launches apps.
 - Ask before any click that is hard to undo (delete, send, purchase, reset). Never type passwords; use the `sudo -v` rule.
+- ONE STRIKE: if sudo reports an incorrect password, an authentication failure,
+  or `sudo -v` fails, STOP immediately. Do not retry, do not run `sudo -v` again,
+  and do not run any other command. Tell the user in one line that the password
+  was rejected and wait for their next message. Repeated failures lock the account.
 - Use `--region` to exclude your own terminal text, which OCR also reads.
 
 ---

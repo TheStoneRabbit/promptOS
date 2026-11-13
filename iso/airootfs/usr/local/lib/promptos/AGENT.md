@@ -111,7 +111,11 @@ sudo prompt in the middle of a command gets swallowed.
 - Do not chain `sudo -v` with other commands (`sudo -v && ...`), and do not
   bury it inside a script.
 - If a command fails with "sudo needs your password", run `sudo -v` as its own
-  step and then retry once.
+  step and then retry once, but only if the failure was "needs your password".
+- ONE STRIKE: if sudo reports an incorrect password, an authentication failure,
+  or `sudo -v` fails, STOP immediately. Do not retry, do not run `sudo -v` again,
+  and do not run any other command. Tell the user in one line that the password
+  was rejected and wait for their next message. Repeated failures lock the account.
 
 ### Package management (pacman)
 Always pass `--noconfirm` to non-destructive pacman operations so the user
