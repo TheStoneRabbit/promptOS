@@ -33,7 +33,7 @@ ensure_banner() {
         [ -n "$nid" ] || { echo "promptos-input: could not post the hands-off banner; refusing to send input." >&2; exit 1; }
         printf '%s' "$now" > "$banner_last"
         setsid bash -c 'while :; do l=$(cat "$1" 2>/dev/null || echo 0); [ $(( $(date +%s) - l )) -gt "$3" ] && break; sleep 1; done; notify-send -a promptOS -u normal -t 5000 -r "$2" "promptOS" "You can use the mouse again" 2>/dev/null' _ "$banner_last" "$nid" "$idle" >/dev/null 2>&1 </dev/null &
-        sleep "${PROMPTOS_BANNER_DELAY:-1.5}"
+        sleep "${PROMPTOS_BANNER_DELAY:-0.5}"
     fi
     date +%s > "$banner_last"
 }

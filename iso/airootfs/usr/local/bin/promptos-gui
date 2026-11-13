@@ -698,6 +698,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
 
         self._load_env_config()
         self._install_css()
+        self._start_control_watch()
         self._build_ui()
         if self.overlay:
             self._apply_overlay_chrome()
@@ -1054,6 +1055,59 @@ class PromptOSWindow(Adw.ApplicationWindow):
         else:
             # X11: minimize (not unmap) so position/size persist for the next summon
             self.minimize()
+
+    # --- Hide the window while promptOS is driving the mouse/keyboard ---------
+    def _start_control_watch(self):
+        self._ctl_hidden = False
+        self._ctl_restore = False
+        GLib.timeout_add(250, self._control_watch)
+
+    def _control_active(self) -> bool:
+        """True while promptos-input has sent synthetic input recently."""
+        try:
+            idle = float(os.environ.get("PROMPTOS_GUI_HIDE_IDLE", "4"))
+            rt = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+            ts = int(Path(rt, "promptos-input.last").read_text().strip() or 0)
+            return (time.time() - ts) <= idle
+        except Exception:
+            return False
+
+    def _control_watch(self):
+        try:
+            active = self._control_active()
+            if active and not self._ctl_hidden:
+                self._ctl_hidden = True
+                if self.overlay:
+                    self._ctl_restore = bool(getattr(self, "_overlay_shown", False))
+                else:
+                    self._ctl_restore = bool(self.get_visible())
+                if self._ctl_restore:
+                    app = self.get_application()
+                    if app is not None:
+                        app.hold()  # keep the app alive while its window is hidden
+                    if os.environ.get("WAYLAND_DISPLAY"):
+                        self.set_visible(False)
+                    else:
+                        self.minimize()
+            elif not active and self._ctl_hidden:
+                self._ctl_hidden = False
+                if self._ctl_restore:
+                    self._ctl_restore = False
+                    if self.overlay:
+                        # Only bring it back if the user didn't dismiss it meanwhile.
+                        if getattr(self, "_overlay_shown", False):
+                            self.reveal_overlay()
+                    else:
+                        self.set_visible(True)
+                        if not os.environ.get("WAYLAND_DISPLAY"):
+                            self.unminimize()
+                        self.present()
+                    app = self.get_application()
+                    if app is not None:
+                        app.release()
+        except Exception:
+            pass
+        return True
 
     def toggle_overlay(self):
         # Ctrl+Space again while open closes it, regardless of focus.

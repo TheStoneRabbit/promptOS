@@ -4,17 +4,23 @@ set -u
 [ $# -ge 2 ] || { echo "usage: promptos-click X Y [label]" >&2; exit 1; }
 x=$1; y=$2; label=${3:-"$1,$2"}
 TOL=${PROMPTOS_CLICK_TOL:-3}
+vf="${XDG_RUNTIME_DIR:-/tmp}/promptos-click.verified"
 abs() { [ "$1" -lt 0 ] && echo $(( -$1 )) || echo "$1"; }
 for try in 1 2; do
   promptos-status "Aiming at $label ($x,$y), try $try"
   promptos-pointer goto "$x" "$y" >/dev/null 2>&1 || { promptos-status "ABORTED $label: goto failed"; exit 1; }
+  if [ "${PROMPTOS_CLICK_VERIFY:-first}" != always ] && [ -f "$vf" ] && [ $(( $(date +%s) - $(stat -c %Y "$vf") )) -le "${PROMPTOS_CLICK_VERIFY_TTL:-60}" ]; then
+    promptos-input click left >/dev/null 2>&1
+    promptos-status "Clicked $label (verify skipped)"
+    exit 0
+  fi
   pos=$(promptos-pointer locate 2>/dev/null | tail -n 1)
   set -- $pos
   if [ $# -eq 2 ]; then
     dx=$(abs $(( $1 - x ))); dy=$(abs $(( $2 - y )))
     if [ "$dx" -le "$TOL" ] && [ "$dy" -le "$TOL" ]; then
       promptos-input click left >/dev/null 2>&1
-      promptos-status "Clicked $label at ($1,$2)"
+      touch "$vf"; promptos-status "Clicked $label at ($1,$2)"
       exit 0
     fi
     promptos-status "Pointer at $1,$2, off target $label"
@@ -22,5 +28,5 @@ for try in 1 2; do
     promptos-status "Could not locate the pointer"
   fi
 done
-promptos-status "ABORTED click on $label: pointer never reached the target"
+rm -f "$vf"; promptos-status "ABORTED click on $label: pointer never reached the target"
 exit 3
