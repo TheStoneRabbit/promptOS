@@ -64,7 +64,7 @@ Flow:
 Rules:
 - Synthetic input shows a HANDS OFF banner by itself. Tell the user to keep their hands off the mouse and keyboard during a sequence.
 - Use `--region` to exclude your own terminal text, which OCR also reads.
-- To avoid OCR reading your own terminal, do GUI work on an empty workspace: `promptos-workspace away` jumps to the last (empty) workspace, launch the app there, then close it with `pkill -f <app>` and run `promptos-workspace back`. Close the app first, because GNOME adds a new empty workspace after an occupied one and `away` would land on the wrong one. Use `pkill -f`, since `pkill -x` cannot match names over 15 characters.
+- For EVERY automated GUI control task (clicking, typing, key presses, OCR, screenshots), first run `promptos-workspace away` to move to the last (empty) workspace, so the terminal is off screen and OCR and clicks never hit it. Launch the app there, do the work, then close the app with `pkill -f <app>` (unless the user wants it left open) and run `promptos-workspace back`. Close the app before `back`, because GNOME adds a new empty workspace after an occupied one. Use `pkill -f`, since `pkill -x` cannot match names over 15 characters. Skip this only if the user explicitly asks you to control a window on the current workspace.
 - Prefer direct routes over clicking: `gnome-control-center <page>` opens a Settings page, and `setsid -f <app> >/dev/null 2>&1` launches apps.
 - If text is not found, retry with `--tries` and `--scroll-key`, then report. Never click a guessed position.
 - Ask before any click that is hard to undo (delete, send, purchase, reset). Never type passwords; use the `sudo -v` rule.

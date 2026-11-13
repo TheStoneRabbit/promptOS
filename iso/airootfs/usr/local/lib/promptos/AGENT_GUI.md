@@ -183,7 +183,7 @@ Tools:
 - `promptos-input move DX DY | moveto X Y | click [left|right|middle] | type "text" | key CODE:1 CODE:0`: raw synthetic input. Keys are Linux keycodes (Enter 28, End 107). Needs the user service `ydotool.service`.
 - `promptos-status "text"`: one-line on-screen status, also written to the action log.
 - `promptos-hands-off SECS "reason"`: blocks for SECS seconds while showing a critical HANDS OFF alert.
-- `promptos-workspace away|back`: `away` jumps to the last (empty) GNOME workspace, `back` returns to workspace 1. Use it so OCR does not read your own terminal.
+- `promptos-workspace away|back`: `away` jumps to the last (empty) GNOME workspace, `back` returns to workspace 1. Use it around every automated GUI control task so the terminal is never on screen.
 
 Flow:
 1. Tell the user what you are about to do (`promptos-status` is optional, since `promptos-click` already posts status).
@@ -202,7 +202,7 @@ Rules:
   and do not run any other command. Tell the user in one line that the password
   was rejected and wait for their next message. Repeated failures lock the account.
 - Use `--region` to exclude your own terminal text, which OCR also reads.
-- To avoid OCR reading your own terminal, do GUI work on an empty workspace: `promptos-workspace away` jumps to the last (empty) workspace, launch the app there, then close it with `pkill -f <app>` and run `promptos-workspace back`. Close the app first, because GNOME adds a new empty workspace after an occupied one and `away` would land on the wrong one. Use `pkill -f`, since `pkill -x` cannot match names over 15 characters.
+- For EVERY automated GUI control task (clicking, typing, key presses, OCR, screenshots), first run `promptos-workspace away` to move to the last (empty) workspace, so the terminal is off screen and OCR and clicks never hit it. Launch the app there, do the work, then close the app with `pkill -f <app>` (unless the user wants it left open) and run `promptos-workspace back`. Close the app before `back`, because GNOME adds a new empty workspace after an occupied one. Use `pkill -f`, since `pkill -x` cannot match names over 15 characters. Skip this only if the user explicitly asks you to control a window on the current workspace.
 
 ---
 
