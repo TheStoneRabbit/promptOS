@@ -485,20 +485,17 @@ def install_gnome():
     run(f"arch-chroot {MOUNTPOINT} systemctl enable gdm.service", check=False)
     # Drop the root tty1 autologin so it doesn't fight GDM.
     run(f"rm -f {MOUNTPOINT}/etc/systemd/system/getty@tty1.service.d/autologin.conf", check=False)
-    # Super+Space opens the promptOS bar. GNOME binds it to input-source switching.
+    # Ctrl+Alt+Space opens the promptOS bar (no Super key required).
     key = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/promptos/"
     os.makedirs(f"{MOUNTPOINT}/etc/dconf/db/local.d", exist_ok=True)
     with open(f"{MOUNTPOINT}/etc/dconf/db/local.d/02-promptos-keybindings", "w") as f:
         f.write(
-            "[org/gnome/desktop/wm/keybindings]\n"
-            "switch-input-source=@as []\n"
-            "switch-input-source-backward=@as []\n\n"
             "[org/gnome/settings-daemon/plugins/media-keys]\n"
             f"custom-keybindings=['{key}']\n\n"
             f"[{key.strip('/')}]\n"
             "name='promptOS'\n"
             "command='/usr/local/bin/promptos-gui --overlay --toggle'\n"
-            "binding='<Super>space'\n"
+            "binding='<Primary><Alt>space'\n"
         )
     run(f"arch-chroot {MOUNTPOINT} dconf update", check=False)
     os.makedirs(f"{MOUNTPOINT}/etc/xdg/autostart", exist_ok=True)
@@ -735,7 +732,7 @@ def main():
             "\n\nAfter logging in to GNOME as your admin user, run:\n"
             "  sudo promptos-firstboot --force\n"
             "to set up your AI provider, then log out and back in.\n"
-            "Summon the promptOS bar with Super+Space."
+            "Summon the promptOS bar with Ctrl+Alt+Space."
         )
     elif install_gnome_choice:
         done_msg += (

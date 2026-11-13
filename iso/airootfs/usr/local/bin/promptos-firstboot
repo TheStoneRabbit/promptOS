@@ -56,5 +56,5 @@ mkdir -p /etc/promptos
 touch "$MARKER"
 echo
 echo "${GREEN}Setup complete.${RESET}"
-echo "${DIM}Tip: press Ctrl+Space (Super+Space on GNOME) anytime to summon the promptOS search bar.${RESET}"
+echo "${DIM}Tip: press Ctrl+Space (Ctrl+Alt+Space on GNOME) anytime to summon the promptOS search bar.${RESET}"
 sleep 2
