@@ -21,7 +21,8 @@ from .base import Provider, Message
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_MODEL = "claude-sonnet-5-5"
-MAX_TOKENS = 8096
+MAX_TOKENS = 16000
+EFFORT = "medium"
 CACHE_CONTROL = {"type": "ephemeral"}
 
 
@@ -64,6 +65,7 @@ class ClaudeProvider(Provider):
             "max_tokens": MAX_TOKENS,
             "messages": api_messages,
             "stream": stream,
+            "output_config": {"effort": EFFORT},
         }
         if system_blocks:
             body["system"] = system_blocks
