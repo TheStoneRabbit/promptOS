@@ -859,6 +859,7 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.chat_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.chat_scroll.set_child(self.chat_list)
         self.chat_scroll.get_vadjustment().connect("value-changed", self._on_chat_scroll_changed)
+        self.chat_scroll.get_vadjustment().connect("changed", self._on_chat_content_grew)
         main.append(self.chat_scroll)
 
         cmd_frame = Gtk.Frame()
@@ -881,6 +882,9 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self.cmd_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.cmd_scroll.set_propagate_natural_height(True)
         self.cmd_scroll.set_child(self.cmd_cards_box)
+        self._cmd_follow = True
+        self.cmd_scroll.get_vadjustment().connect("value-changed", self._on_cmd_scroll_changed)
+        self.cmd_scroll.get_vadjustment().connect("changed", self._on_cmd_content_grew)
         cmd_box.append(cmd_label)
         cmd_box.append(self.cmd_scroll)
         cmd_frame.set_child(cmd_box)
@@ -1217,6 +1221,30 @@ class PromptOSWindow(Adw.ApplicationWindow):
         self._programmatic_scroll = True
         adj.set_value(max(0.0, adj.get_upper() - adj.get_page_size()))
         GLib.idle_add(self._clear_programmatic_scroll_flag)
+        return False
+
+    def _on_chat_content_grew(self, adj: Gtk.Adjustment):
+        # Scrollable height changed (new/streaming content laid out): stay pinned to the bottom.
+        if not self.follow_output:
+            return
+        self._programmatic_scroll = True
+        adj.set_value(max(0.0, adj.get_upper() - adj.get_page_size()))
+        GLib.idle_add(self._clear_programmatic_scroll_flag)
+
+    def _on_cmd_scroll_changed(self, adj: Gtk.Adjustment):
+        if getattr(self, "_cmd_programmatic", False):
+            return
+        self._cmd_follow = self._is_near_bottom(adj)
+
+    def _on_cmd_content_grew(self, adj: Gtk.Adjustment):
+        if not self._cmd_follow:
+            return
+        self._cmd_programmatic = True
+        adj.set_value(max(0.0, adj.get_upper() - adj.get_page_size()))
+        GLib.idle_add(self._clear_cmd_programmatic_flag)
+
+    def _clear_cmd_programmatic_flag(self):
+        self._cmd_programmatic = False
         return False
 
     def _clear_programmatic_scroll_flag(self):
