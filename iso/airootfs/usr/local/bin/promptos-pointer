@@ -29,10 +29,10 @@ case "$cmd" in
     d=$(mktemp -d)
     trap 'gsettings set $KEY locate-pointer "$orig"; rm -rf "$d"' EXIT
     sleep 0.3
-    promptos-screenshot "$d/a.png" >/dev/null || exit 2
+    PROMPTOS_NO_GUI_WAIT=1 promptos-screenshot "$d/a.png" >/dev/null || exit 2
     gsettings set $KEY locate-pointer true
     promptos-input key 29:1 29:0
-    promptos-screenshot "$d/b.png" >/dev/null || exit 2
+    PROMPTOS_NO_GUI_WAIT=1 promptos-screenshot "$d/b.png" >/dev/null || exit 2
     res=$(magick "$d/a.png" "$d/b.png" -compose difference -composite -colorspace gray -threshold 5% \
         -define connected-components:verbose=true -define connected-components:area-threshold=150 \
         -connected-components 8 null: 2>/dev/null | awk '
